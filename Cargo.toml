@@ -13,9 +13,13 @@ members = [
 clap = { version = "=4.6.7", features = ["derive"] }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = { version = "=1.0.154" }
-toml = { version = "=1.2.1+spec-1.1.0" }
+toml = { version = "=1.2.1" }
 thiserror = { version = "=2.0.21" }
 tempfile = { version = "=3.27.0" }
+bytes = { version = "=1.10.0" }
+futures = { version = "=0.3.34" }
+url = { version = "=2.5.8" }
+tokio-util = { version = "=0.7.20" }
 barry-protocol = { path = "crates/protocol" }
 barry-llm = { path = "crates/llm" }
 barry-policy = { path = "crates/policy" }

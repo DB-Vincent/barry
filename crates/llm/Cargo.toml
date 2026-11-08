@@ -5,3 +5,8 @@ edition = "2021"
 
 [dependencies]
 barry-protocol = { workspace = true }
+serde = { workspace = true }
+futures = { workspace = true }
+bytes = { workspace = true }
+tokio-util = { workspace = true }
+thiserror = { workspace = true }
