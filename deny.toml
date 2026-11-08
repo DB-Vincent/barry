@@ -1,0 +1,12 @@
+advisories = { ignore = [], database = { force-offline = true } }
+sources = [{ allow = ["crates-io"], deny = ["other"] }]
+licenses = { allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-DFS-2016",
+    "Unlicense",
+    "0BSD",
+] }

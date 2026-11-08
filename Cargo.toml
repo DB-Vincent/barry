@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/cli",
+]
+
+[workspace.dependencies]
+clap = { version = "=4.6.7", features = ["derive"] }
+
+# Dev-dependencies
+assert_cmd = { version = "=2.2.2" }
+predicates = { version = "=3.1.4" }
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
