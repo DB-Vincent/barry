@@ -30,6 +30,12 @@ enum RulesCommands {
 }
 
 fn main() {
+    // Load config first; on error, exit 2 with a clean message.
+    if let Err(err) = barry_core::config::Config::load() {
+        eprintln!("{err}");
+        std::process::exit(2);
+    }
+
     let cli = Cli::parse();
 
     match cli.command {

@@ -1,0 +1,12 @@
+[package]
+name = "barry-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+barry-protocol = { workspace = true }
+barry-llm = { workspace = true }
+barry-policy = { workspace = true }
+barry-sandbox = { workspace = true }
+toml = { workspace = true }
+thiserror = { workspace = true }
