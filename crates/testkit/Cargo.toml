@@ -1,0 +1,22 @@
+[package]
+name = "barry-testkit"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+barry-protocol = { workspace = true }
+barry-llm = { workspace = true }
+barry-core = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+wiremock = { workspace = true }
+tempfile = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+tokio-util = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+assert_cmd = { workspace = true }
+predicates = { workspace = true }
