@@ -2,7 +2,6 @@
 //! Provider trait and shared request/event types.
 
 use barry_protocol::{Message, StopReason, ToolSpec, Usage};
-use bytes::Bytes;
 use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
@@ -48,8 +47,22 @@ pub trait Provider: Send + Sync {
     ) -> BoxStream<'static, Result<LlmEvent, LlmError>>;
 }
 
-/// An open HTTP response body as a byte stream.
-pub type BodyStream = BoxStream<'static, Result<Bytes, LlmError>>;
+/// Provider quirks that differ between OpenAI-compatible servers.
+#[derive(Debug, Clone, Default)]
+pub struct Compat {
+    /// The field name used for reasoning deltas: "reasoning_content" | "reasoning"
+    pub reasoning_field: Option<String>,
+    /// Whether the provider supports parallel tool calls
+    pub supports_parallel_tool_calls: bool,
+    /// Whether the provider sends usage in stream chunks
+    pub supports_stream_usage: bool,
+}
+
+pub mod openai;
+mod retry;
+mod sse;
+
+pub use openai::OpenAiProvider;
 
 impl std::fmt::Display for LlmEvent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
