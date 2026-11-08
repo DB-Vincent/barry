@@ -2,10 +2,17 @@
 resolver = "2"
 members = [
     "crates/cli",
+    "crates/protocol",
+    "crates/policy",
 ]
 
 [workspace.dependencies]
 clap = { version = "=4.6.7", features = ["derive"] }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = { version = "=1.0.154" }
+barry-protocol = { path = "crates/protocol" }
+barry-policy = { path = "crates/policy" }
+thiserror = { version = "=2.0.21" }
 
 # Dev-dependencies
 assert_cmd = { version = "=2.2.2" }

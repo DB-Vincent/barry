@@ -1,0 +1,8 @@
+[package]
+name = "barry-policy"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+barry-protocol = { workspace = true }
+thiserror = { workspace = true }
