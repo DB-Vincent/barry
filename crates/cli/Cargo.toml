@@ -1,0 +1,11 @@
+[package]
+name = "barry"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+assert_cmd = { workspace = true }
+predicates = { workspace = true }
