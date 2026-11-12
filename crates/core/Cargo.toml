@@ -13,6 +13,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 futures = { workspace = true }
 tokio-util = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "process", "signal", "sync"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -4,6 +4,7 @@ use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use barry_llm::{LlmEvent, LlmRequest, Provider};
 use barry_protocol::{
@@ -93,7 +94,8 @@ fn tool_specs() -> Vec<ToolSpec> {
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "command": { "type": "string", "description": "The bash command to run" }
+                    "command": { "type": "string", "description": "The bash command to run" },
+                    "timeout": { "type": "number", "description": "Timeout in seconds (default 30)" }
                 },
                 "required": ["command"]
             }),
@@ -299,7 +301,8 @@ impl Agent {
                     .get("command")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                Self::execute_bash(command).await
+                let timeout = call.arguments.get("timeout").and_then(|v| v.as_u64());
+                Self::execute_bash(command, timeout).await
             }
             _ => Ok(ToolResult {
                 ok: false,
@@ -377,29 +380,61 @@ impl Agent {
         }
     }
 
-    async fn execute_bash(command: &str) -> Result<ToolResult, CoreError> {
-        let output = std::process::Command::new("bash")
+    async fn execute_bash(
+        command: &str,
+        timeout_secs: Option<u64>,
+    ) -> Result<ToolResult, CoreError> {
+        let child = tokio::process::Command::new("bash")
             .arg("-c")
             .arg(command)
-            .output()
+            .process_group(0)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
             .map_err(|e| CoreError::Provider(format!("failed to run bash: {e}")))?;
 
-        let exit_code = output.status.code().unwrap_or(-1);
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let child_id = child.id().unwrap_or(0);
+        let timeout = timeout_secs.unwrap_or(30);
 
-        if exit_code == 0 {
-            Ok(ToolResult {
-                ok: true,
-                content: stdout,
-                display: format!("bash exit {exit_code}"),
-            })
-        } else {
-            Ok(ToolResult {
-                ok: false,
-                content: format!("exit_code: {exit_code}\nstderr: {stderr}"),
-                display: format!("bash exit {exit_code}"),
-            })
+        let result =
+            tokio::time::timeout(Duration::from_secs(timeout), child.wait_with_output()).await;
+
+        match result {
+            Ok(Ok(output)) => {
+                let exit_code = output.status.code().unwrap_or(-1);
+                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+                if exit_code == 0 {
+                    Ok(ToolResult {
+                        ok: true,
+                        content: stdout,
+                        display: format!("bash exit {exit_code}"),
+                    })
+                } else {
+                    Ok(ToolResult {
+                        ok: false,
+                        content: format!("exit_code: {exit_code}\nstderr: {stderr}"),
+                        display: format!("bash exit {exit_code}"),
+                    })
+                }
+            }
+            Ok(Err(io_err)) => Err(CoreError::Provider(format!(
+                "failed to read bash output: {io_err}"
+            ))),
+            Err(_elapsed) => {
+                // Timeout: kill the child's process group (background children too).
+                let _ = std::process::Command::new("kill")
+                    .arg("-KILL")
+                    .arg(format!("-{child_id}"))
+                    .output();
+
+                Ok(ToolResult {
+                    ok: false,
+                    content: format!("timed out after {timeout} seconds"),
+                    display: format!("bash timed out after {timeout}s"),
+                })
+            }
         }
     }
 }
