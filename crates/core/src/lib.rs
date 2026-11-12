@@ -6,6 +6,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::context::truncate;
 use barry_llm::{LlmEvent, LlmRequest, Provider};
 use barry_protocol::{
     ApprovalChoice, ApprovalRequest, Event, Message, StopReason, ToolCall, ToolSpec,
@@ -17,6 +18,7 @@ use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
 pub mod config;
+pub mod context;
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -94,8 +96,16 @@ fn tool_specs() -> Vec<ToolSpec> {
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "command": { "type": "string", "description": "The bash command to run" },
-                    "timeout": { "type": "number", "description": "Timeout in seconds (default 30)" }
+                    "command": {
+                        "type": "string",
+                        "description": "The command to run"
+                    },
+                    "timeout_secs": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 600,
+                        "description": "Timeout in seconds (default 120)"
+                    }
                 },
                 "required": ["command"]
             }),
@@ -301,8 +311,15 @@ impl Agent {
                     .get("command")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                let timeout = call.arguments.get("timeout").and_then(|v| v.as_u64());
-                Self::execute_bash(command, timeout).await
+                // Resolve default and bounds at the boundary; the worker takes a
+                // plain u64 and needs no Option.
+                let timeout_secs = call
+                    .arguments
+                    .get("timeout_secs")
+                    .and_then(|v| v.as_u64())
+                    .map(|secs| secs.clamp(1, 600))
+                    .unwrap_or(120);
+                Self::execute_bash(command, timeout_secs).await
             }
             _ => Ok(ToolResult {
                 ok: false,
@@ -325,6 +342,9 @@ impl Agent {
             .map(|(i, line)| format!("{}: {}", i + 1, line))
             .collect::<Vec<_>>()
             .join("\n");
+
+        let numbered = truncate(&numbered, 30_000).into_owned();
+
         Ok(ToolResult {
             ok: true,
             content: numbered.clone(),
@@ -380,35 +400,35 @@ impl Agent {
         }
     }
 
-    async fn execute_bash(
-        command: &str,
-        timeout_secs: Option<u64>,
-    ) -> Result<ToolResult, CoreError> {
-        let child = tokio::process::Command::new("bash")
+    async fn execute_bash(command: &str, timeout_secs: u64) -> Result<ToolResult, CoreError> {
+        let child = tokio::process::Command::new("/bin/sh")
             .arg("-c")
             .arg(command)
             .process_group(0)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
-            .map_err(|e| CoreError::Provider(format!("failed to run bash: {e}")))?;
+            .map_err(|e| CoreError::Provider(format!("failed to run /bin/sh: {e}")))?;
 
         let child_id = child.id().unwrap_or(0);
-        let timeout = timeout_secs.unwrap_or(30);
 
         let result =
-            tokio::time::timeout(Duration::from_secs(timeout), child.wait_with_output()).await;
+            tokio::time::timeout(Duration::from_secs(timeout_secs), child.wait_with_output()).await;
 
         match result {
             Ok(Ok(output)) => {
                 let exit_code = output.status.code().unwrap_or(-1);
-                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                // Bind the Cow temporaries: `truncate` borrows from them, so they
+                // must outlive the returned Cow.
+                let stdout_raw = String::from_utf8_lossy(&output.stdout);
+                let stderr_raw = String::from_utf8_lossy(&output.stderr);
+                let stdout = truncate(&stdout_raw, 30_000);
+                let stderr = truncate(&stderr_raw, 30_000);
 
                 if exit_code == 0 {
                     Ok(ToolResult {
                         ok: true,
-                        content: stdout,
+                        content: stdout.into_owned(),
                         display: format!("bash exit {exit_code}"),
                     })
                 } else {
@@ -431,8 +451,8 @@ impl Agent {
 
                 Ok(ToolResult {
                     ok: false,
-                    content: format!("timed out after {timeout} seconds"),
-                    display: format!("bash timed out after {timeout}s"),
+                    content: format!("timed out after {timeout_secs}s"),
+                    display: format!("bash timed out after {timeout_secs}s"),
                 })
             }
         }

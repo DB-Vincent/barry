@@ -48,7 +48,7 @@ impl Approver for LocalApprover {
     }
 }
 
-fn done_bash(command: &str, timeout: u64) -> LlmEvent {
+fn done_bash(command: &str, timeout_secs: u64) -> LlmEvent {
     LlmEvent::Done {
         message: Message::Assistant {
             content: None,
@@ -56,7 +56,7 @@ fn done_bash(command: &str, timeout: u64) -> LlmEvent {
             tool_calls: vec![barry_protocol::ToolCall {
                 id: "call_1".to_string(),
                 name: "bash".to_string(),
-                arguments: json!({ "command": command, "timeout": timeout }),
+                arguments: json!({ "command": command, "timeout_secs": timeout_secs }),
             }],
         },
         stop: StopReason::ToolCalls,
@@ -143,4 +143,46 @@ async fn bc_2_4_bash_timeout_kills_children() {
         .filter(|e| matches!(e, Event::TurnFinished { .. }))
         .collect();
     assert_eq!(finished.len(), 1);
+}
+
+/// Runs `sleep 100` with the given timeout and returns the collected events.
+async fn run_sleep_with_timeout(timeout_secs: u64) -> Vec<Event> {
+    let provider = Arc::new(LocalProvider::new(vec![
+        done_bash("sleep 100", timeout_secs),
+        LlmEvent::TextDelta("timed out".to_string()),
+        done_text("timed out"),
+    ]));
+    let approver = Arc::new(LocalApprover);
+
+    let mut agent = Agent::new(
+        barry_core::config::Config {
+            default_model: "test".to_string(),
+            max_turns: 10,
+        },
+        provider,
+        approver,
+    )
+    .expect("agent constructs");
+
+    let (tx, rx) = mpsc::channel(32);
+    agent
+        .run_turn("run sleep 100", tx, CancellationToken::new())
+        .await
+        .expect("ok");
+    collect_events(rx).await
+}
+
+#[tokio::test]
+async fn bc_2_4_timeout_secs_is_clamped_to_at_least_one() {
+    // timeout_secs: 0 is clamped to 1 before reaching execute_bash, so this
+    // still times out (after ~1s) instead of being instant or unlimited.
+    let events = run_sleep_with_timeout(0).await;
+
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            Event::ToolFinished { display, .. } if display.contains("timed out after 1s")
+        )),
+        "expected the clamp to raise 0 to 1: {events:?}"
+    );
 }
