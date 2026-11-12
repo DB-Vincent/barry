@@ -143,7 +143,10 @@ dependencies = [
  "barry-protocol",
  "barry-sandbox",
  "futures",
+ "serde_json",
+ "tempfile",
  "thiserror",
+ "tokio",
  "tokio-util",
  "toml",
 ]

@@ -50,17 +50,44 @@ fn system_prompt() -> String {
 }
 
 fn tool_specs() -> Vec<ToolSpec> {
-    vec![ToolSpec {
-        name: "read".to_string(),
-        description: "Read a file and return its contents with line numbers".to_string(),
-        parameters: json!({
-            "type": "object",
-            "properties": {
-                "path": { "type": "string", "description": "Path to the file" }
-            },
-            "required": ["path"]
-        }),
-    }]
+    vec![
+        ToolSpec {
+            name: "read".to_string(),
+            description: "Read a file and return its contents with line numbers".to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Path to the file" }
+                },
+                "required": ["path"]
+            }),
+        },
+        ToolSpec {
+            name: "write".to_string(),
+            description: "Write content to a file".to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Path to the file" },
+                    "content": { "type": "string", "description": "Content to write" }
+                },
+                "required": ["path", "content"]
+            }),
+        },
+        ToolSpec {
+            name: "edit".to_string(),
+            description: "Replace old_string with new_string in a file".to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Path to the file" },
+                    "old_string": { "type": "string", "description": "Text to replace" },
+                    "new_string": { "type": "string", "description": "Replacement text" }
+                },
+                "required": ["path", "old_string", "new_string"]
+            }),
+        },
+    ]
 }
 
 struct ToolResult {
@@ -224,6 +251,37 @@ impl Agent {
                     .unwrap_or("");
                 Self::execute_read(path, &call.id, _approver).await
             }
+            "write" => {
+                let path = call
+                    .arguments
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let content = call
+                    .arguments
+                    .get("content")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                Self::execute_write(path, content).await
+            }
+            "edit" => {
+                let path = call
+                    .arguments
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let old_string = call
+                    .arguments
+                    .get("old_string")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let new_string = call
+                    .arguments
+                    .get("new_string")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                Self::execute_edit(path, old_string, new_string).await
+            }
             _ => Ok(ToolResult {
                 ok: false,
                 content: format!("unknown tool: {}", call.name),
@@ -250,5 +308,53 @@ impl Agent {
             content: numbered.clone(),
             display: numbered,
         })
+    }
+
+    async fn execute_write(path: &str, content: &str) -> Result<ToolResult, CoreError> {
+        std::fs::write(path, content).map_err(|e| CoreError::Provider(e.to_string()))?;
+        Ok(ToolResult {
+            ok: true,
+            content: format!("wrote {} bytes to {}", content.len(), path),
+            display: format!("wrote {} bytes to {}", content.len(), path),
+        })
+    }
+
+    async fn execute_edit(
+        path: &str,
+        old_string: &str,
+        new_string: &str,
+    ) -> Result<ToolResult, CoreError> {
+        let content =
+            std::fs::read_to_string(path).map_err(|e| CoreError::Provider(e.to_string()))?;
+        let count = content.matches(old_string).count();
+
+        match count {
+            0 => Ok(ToolResult {
+                ok: false,
+                content: format!("no matches found for '{}' in {}", old_string, path),
+                display: format!("no matches found for '{}'", old_string),
+            }),
+            1 => {
+                let new_content = content.replacen(old_string, new_string, 1);
+                std::fs::write(path, &new_content)
+                    .map_err(|e| CoreError::Provider(e.to_string()))?;
+                Ok(ToolResult {
+                    ok: true,
+                    content: format!(
+                        "replaced 1 occurrence of '{}' with '{}' in {}",
+                        old_string, new_string, path
+                    ),
+                    display: format!("replaced '{}' with '{}'", old_string, new_string),
+                })
+            }
+            n => Ok(ToolResult {
+                ok: false,
+                content: format!(
+                    "found {} matches for '{}' in {}; no changes made",
+                    n, old_string, path
+                ),
+                display: format!("found {} matches for '{}'; no changes made", n, old_string),
+            }),
+        }
     }
 }
