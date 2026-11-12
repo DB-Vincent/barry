@@ -87,6 +87,17 @@ fn tool_specs() -> Vec<ToolSpec> {
                 "required": ["path", "old_string", "new_string"]
             }),
         },
+        ToolSpec {
+            name: "bash".to_string(),
+            description: "Run a bash command".to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "command": { "type": "string", "description": "The bash command to run" }
+                },
+                "required": ["command"]
+            }),
+        },
     ]
 }
 
@@ -282,6 +293,14 @@ impl Agent {
                     .unwrap_or("");
                 Self::execute_edit(path, old_string, new_string).await
             }
+            "bash" => {
+                let command = call
+                    .arguments
+                    .get("command")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                Self::execute_bash(command).await
+            }
             _ => Ok(ToolResult {
                 ok: false,
                 content: format!("unknown tool: {}", call.name),
@@ -355,6 +374,32 @@ impl Agent {
                 ),
                 display: format!("found {} matches for '{}'; no changes made", n, old_string),
             }),
+        }
+    }
+
+    async fn execute_bash(command: &str) -> Result<ToolResult, CoreError> {
+        let output = std::process::Command::new("bash")
+            .arg("-c")
+            .arg(command)
+            .output()
+            .map_err(|e| CoreError::Provider(format!("failed to run bash: {e}")))?;
+
+        let exit_code = output.status.code().unwrap_or(-1);
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+        if exit_code == 0 {
+            Ok(ToolResult {
+                ok: true,
+                content: stdout,
+                display: format!("bash exit {exit_code}"),
+            })
+        } else {
+            Ok(ToolResult {
+                ok: false,
+                content: format!("exit_code: {exit_code}\nstderr: {stderr}"),
+                display: format!("bash exit {exit_code}"),
+            })
         }
     }
 }
