@@ -196,7 +196,20 @@ impl Agent {
             }
         }
 
-        Err(CoreError::Provider("max turns exceeded".into()))
+        // PLAN 5: the limit is a normal stop with a notice, not an error.
+        // The CLI turns this notice into exit code 3 (BC-2.10).
+        events
+            .send(Event::Notice("turn limit reached".to_string()))
+            .await
+            .map_err(|_| CoreError::ChannelClosed)?;
+        events
+            .send(Event::TurnFinished {
+                stop: StopReason::Stop,
+                usage: None,
+            })
+            .await
+            .map_err(|_| CoreError::ChannelClosed)?;
+        Ok(StopReason::Stop)
     }
 
     pub fn session_path(&self) -> &Path {
