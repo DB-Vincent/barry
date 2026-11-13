@@ -102,6 +102,7 @@ async fn bc_2_4_bash_timeout_kills_children() {
         },
         provider.clone(),
         approver,
+        None,
     )
     .expect("agent constructs");
 
@@ -163,6 +164,7 @@ async fn run_sleep_with_timeout(timeout_secs: u64) -> Vec<Event> {
         },
         provider,
         approver,
+        None,
     )
     .expect("agent constructs");
 

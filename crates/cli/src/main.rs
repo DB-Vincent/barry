@@ -162,7 +162,7 @@ async fn run_headless(cfg: Config, prompt: String, json: bool, model: Option<Str
             ..Compat::default()
         },
     ));
-    let mut agent = match Agent::new(cfg, provider, Arc::new(HeadlessApprover)) {
+    let mut agent = match Agent::new(cfg, provider, Arc::new(HeadlessApprover), None) {
         Ok(agent) => agent,
         Err(err) => {
             eprintln!("{err}");

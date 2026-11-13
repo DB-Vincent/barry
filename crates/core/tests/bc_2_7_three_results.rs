@@ -120,6 +120,7 @@ async fn bc_2_7_three_results_in_call_order_when_one_fails() {
         },
         provider.clone(),
         Arc::new(LocalApprover),
+        None,
     )
     .expect("agent constructs");
 

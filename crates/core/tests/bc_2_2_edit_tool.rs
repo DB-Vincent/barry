@@ -108,6 +108,7 @@ async fn bc_2_2_edit_unique_match_changes_file() {
         },
         provider.clone(),
         approver,
+        None,
     )
     .expect("agent constructs");
 
@@ -152,6 +153,7 @@ async fn bc_2_2_edit_non_unique_no_change() {
         },
         provider,
         approver,
+        None,
     )
     .expect("agent constructs");
 

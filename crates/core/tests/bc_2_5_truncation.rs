@@ -107,6 +107,7 @@ async fn bc_2_5_large_output_is_truncated() {
         },
         provider.clone(),
         approver,
+        None,
     )
     .expect("agent constructs");
 

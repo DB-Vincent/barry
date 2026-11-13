@@ -110,6 +110,7 @@ async fn bc_2_11_tool_list_is_exact_and_prompt_matches_snapshot() {
         },
         provider.clone(),
         Arc::new(LocalApprover),
+        None,
     )
     .expect("agent constructs");
 

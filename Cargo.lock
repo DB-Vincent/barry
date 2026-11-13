@@ -149,6 +149,7 @@ dependencies = [
  "barry-policy",
  "barry-protocol",
  "barry-sandbox",
+ "barry-testkit",
  "futures",
  "insta",
  "serde_json",
