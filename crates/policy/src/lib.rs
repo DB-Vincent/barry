@@ -110,14 +110,17 @@ impl Policy {
         };
 
         // Protected path components (e.g. `.git`, `.env`) always ask.
-        if let Some(name) = canonical.file_name().and_then(|n| n.to_str()) {
-            if self.protected.iter().any(|p| p == name) {
-                return (
-                    Decision::Ask {
-                        reason: format!("protected path: {name}"),
-                    },
-                    None,
-                );
+        // Check every component, not just the final one (PLAN 6.1.1).
+        for component in canonical.components() {
+            if let Some(name) = component.as_os_str().to_str() {
+                if self.protected.iter().any(|p| p == name) {
+                    return (
+                        Decision::Ask {
+                            reason: format!("protected path: {name}"),
+                        },
+                        None,
+                    );
+                }
             }
         }
 
