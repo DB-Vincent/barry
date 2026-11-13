@@ -148,7 +148,10 @@ async fn run_headless(cfg: Config, prompt: String, json: bool, model: Option<Str
         base_url,
         None,
         8192,
-        Compat::default(),
+        Compat {
+            reasoning_field: Some("reasoning_content".into()),
+            ..Compat::default()
+        },
     ));
     let mut agent = match Agent::new(cfg, provider, Arc::new(HeadlessApprover)) {
         Ok(agent) => agent,
@@ -181,6 +184,9 @@ async fn run_headless(cfg: Config, prompt: String, json: bool, model: Option<Str
             print!("{text}");
             let _ = std::io::stdout().flush();
             wrote_text = true;
+        } else if let Event::ReasoningDelta(text) = &event {
+            eprint!("thinking: {text}");
+            let _ = std::io::stderr().flush();
         }
     }
 
