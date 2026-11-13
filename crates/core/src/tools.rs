@@ -194,7 +194,44 @@ pub(crate) async fn execute_tool(
                 .and_then(|v| v.as_u64())
                 .map(|secs| secs.clamp(1, 600))
                 .unwrap_or(120);
-            execute_bash(command, timeout_secs, cancel).await
+
+            // Policy check: deny > grant > ask > allow.
+            let Some(policy) = policy.as_mut() else {
+                return execute_bash(command, timeout_secs, cancel).await;
+            };
+            let (decision, _rule_id) = policy.check_bash(command);
+            match decision {
+                Decision::Allow => execute_bash(command, timeout_secs, cancel).await,
+                Decision::Deny { reason } => Ok(ToolResult {
+                    ok: false,
+                    content: format!("bash denied: {reason}"),
+                    display: "bash denied".to_string(),
+                }),
+                Decision::Ask { reason } => {
+                    let req = ApprovalRequest {
+                        id: call.id.clone(),
+                        tool: "bash".to_string(),
+                        summary: format!("bash: {command}"),
+                        reason,
+                        grant_path: None,
+                    };
+                    let choice = approver.decide(&req).await;
+                    match choice {
+                        ApprovalChoice::Deny => Ok(ToolResult {
+                            ok: false,
+                            content: "denied by user".to_string(),
+                            display: "denied by user".to_string(),
+                        }),
+                        ApprovalChoice::Once | ApprovalChoice::AlwaysThisSession => {
+                            // Grant the first word of the command as a session prefix.
+                            if let Some(first_word) = command.split_whitespace().next() {
+                                policy.approve_prefix(first_word);
+                            }
+                            execute_bash(command, timeout_secs, cancel).await
+                        }
+                    }
+                }
+            }
         }
         // Advertised (PLAN 5.1, BC-2.11) so the model can see the interface,
         // but sub-agents arrive in M8 (PLAN 6.6). Say so plainly instead of

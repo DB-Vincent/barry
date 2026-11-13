@@ -47,6 +47,7 @@ pub struct Policy {
     protected: Vec<String>,
     writable_roots: Vec<PathBuf>,
     grants: Vec<PathBuf>,
+    bash_grants: Vec<String>,
     rules: Vec<BashRule>,
 }
 
@@ -77,6 +78,7 @@ impl Policy {
             protected: cfg.protected,
             writable_roots,
             grants: Vec::new(),
+            bash_grants: Vec::new(),
             rules: cfg.rules,
         })
     }
@@ -164,10 +166,17 @@ impl Policy {
         Ok(())
     }
 
+    /// Grant a bash command prefix for the rest of the session.
+    /// Commands starting with this prefix are allowed without asking.
+    pub fn approve_prefix(&mut self, prefix: &str) {
+        self.bash_grants.push(prefix.to_string());
+    }
+
     /// Check a bash command against the rule table. Deny > ask > allow.
     /// Returns the decision and, if a configured rule decided, its id.
     pub fn check_bash(&self, command: &str) -> (Decision, Option<String>) {
         // 1. Deny rules (substring match on the full command)
+        // Grants do not override explicit denies.
         let deny_rules = [
             "sudo",
             "su",
@@ -192,7 +201,14 @@ impl Policy {
             }
         }
 
-        // 2. Configured rules (exact match on `match` field)
+        // 2. Session grants: commands matching a granted prefix are allowed.
+        for grant in &self.bash_grants {
+            if command.starts_with(grant) {
+                return (Decision::Allow, Some(format!("grant: {grant}")));
+            }
+        }
+
+        // 3. Configured rules (exact match on `match` field)
         for rule in &self.rules {
             if command == rule.r#match {
                 return (rule.decision.clone(), Some(rule.id.clone()));
