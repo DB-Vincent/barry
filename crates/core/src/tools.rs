@@ -296,19 +296,15 @@ async fn execute_bash(
                     let stdout = truncate(&stdout_raw, 30_000);
                     let stderr = truncate(&stderr_raw, 30_000);
 
-                    if exit_code == 0 {
-                        Ok(ToolResult {
-                            ok: true,
-                            content: stdout.into_owned(),
-                            display: format!("bash exit {exit_code}"),
-                        })
-                    } else {
-                        Ok(ToolResult {
-                            ok: false,
-                            content: format!("exit_code: {exit_code}\nstderr: {stderr}"),
-                            display: format!("bash exit {exit_code}"),
-                        })
-                    }
+                    // PLAN 5.1: exit_code, stdout and stderr on both paths,
+                    // each stream truncated on its own.
+                    let content =
+                        format!("exit_code: {exit_code}\nstdout: {stdout}\nstderr: {stderr}");
+                    Ok(ToolResult {
+                        ok: exit_code == 0,
+                        content,
+                        display: format!("bash exit {exit_code}"),
+                    })
                 }
                 Ok(Err(io_err)) => Err(CoreError::Provider(format!(
                     "failed to read bash output: {io_err}"

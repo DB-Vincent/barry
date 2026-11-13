@@ -139,6 +139,15 @@ async fn bc_2_5_large_output_is_truncated() {
         1,
         "expected exactly one truncation marker: {tool_content:.200}"
     );
-    assert!(tool_content.starts_with(&"a".repeat(12_000)));
-    assert!(tool_content.ends_with(&"a".repeat(12_000)));
+    // Head and tail live inside the wrapped stdout, not at the ends of the
+    // message: since PLAN 5.1 the result also carries exit_code and stderr.
+    assert!(
+        tool_content.contains(&format!("stdout: {}", "a".repeat(12_000))),
+        "expected a 12,000-byte head"
+    );
+    assert!(
+        tool_content.contains(&format!("{}\nstderr:", "a".repeat(12_000))),
+        "expected a 12,000-byte tail before stderr"
+    );
+    assert!(tool_content.starts_with("<tool_output tool=\"bash\" ok=\"true\">"));
 }

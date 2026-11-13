@@ -14,6 +14,12 @@ use crate::config::Config;
 use crate::tools::{execute_tool, system_prompt, tool_specs, ToolResult};
 use crate::{Approver, CoreError};
 
+/// Wraps a tool result for the model (PLAN 5). Kept here rather than in
+/// `tools` because it is a property of the message, not of the tool.
+fn wrap_tool_output(tool: &str, ok: bool, content: &str) -> String {
+    format!("<tool_output tool=\"{tool}\" ok=\"{ok}\">\n{content}\n</tool_output>")
+}
+
 /// The main agent that drives the turn loop.
 ///
 /// `history` outlives a single turn: the M2 REPL and BC-2.9 both need the
@@ -130,7 +136,11 @@ impl Agent {
                                             .map_err(|_| CoreError::ChannelClosed)?;
                                         self.history.push(Message::Tool {
                                             tool_call_id: call.id.clone(),
-                                            content: "interrupted by user".to_string(),
+                                            content: wrap_tool_output(
+                                                &call.name,
+                                                false,
+                                                "interrupted by user",
+                                            ),
                                             ok: false,
                                         });
                                         continue;
@@ -161,9 +171,15 @@ impl Agent {
                                         .await
                                         .map_err(|_| CoreError::ChannelClosed)?;
 
+                                    // PLAN 5: every result is wrapped, so the model can
+                                    // tell tool output apart from conversation text.
                                     self.history.push(Message::Tool {
                                         tool_call_id: call.id.clone(),
-                                        content: result.content,
+                                        content: wrap_tool_output(
+                                            &call.name,
+                                            result.ok,
+                                            &result.content,
+                                        ),
                                         ok: result.ok,
                                     });
                                 }
