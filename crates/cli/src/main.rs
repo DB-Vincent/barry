@@ -1,6 +1,7 @@
 //! The `barry` binary: entry point, headless mode and (later) the REPL.
 
 use std::io::Write;
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
@@ -104,7 +105,15 @@ fn run_command(command: Commands) -> ExitCode {
     match command {
         Commands::Rules { command } => match command {
             Some(RulesCommands::Check { command }) => {
-                let policy = barry_policy::Policy::new().expect("policy");
+                let cfg = barry_policy::PolicyConfig {
+                    cwd: std::env::current_dir().unwrap_or_default(),
+                    home: std::env::var("HOME").map(PathBuf::from).unwrap_or_default(),
+                    extra_writable: vec![],
+                    read_deny: vec![],
+                    protected: vec![],
+                    rules: vec![],
+                };
+                let policy = barry_policy::Policy::new(cfg).expect("policy");
                 match policy.check_bash(&command) {
                     barry_protocol::Decision::Allow => {
                         println!("allow");
