@@ -23,6 +23,7 @@ futures = { version = "=0.3.34" }
 url = { version = "=2.5.8" }
 tokio-util = { version = "=0.7.20" }
 reqwest = { version = "=0.13.5", default-features = false, features = ["rustls", "stream", "json"] }
+time = { version = "=0.3.55", features = ["formatting"] }
 barry-protocol = { path = "crates/protocol" }
 barry-llm = { path = "crates/llm" }
 barry-policy = { path = "crates/policy" }
@@ -34,6 +35,7 @@ barry-testkit = { path = "crates/testkit" }
 assert_cmd = { version = "=2.2.2" }
 predicates = { version = "=3.1.4" }
 wiremock = { version = "=0.6.5" }
+insta = { version = "=1.49.0" }
 
 [profile.release]
 lto = "fat"

@@ -1,0 +1,145 @@
+/// BC-2.3 A bash command exiting 1 sends the model exit_code: 1 and stderr
+/// with ok:false, and the turn continues to the model's next reply.
+use barry_core::{Agent, Approver, BoxFuture};
+use barry_llm::{LlmEvent, LlmRequest};
+use barry_protocol::{Event, Message, StopReason};
+use futures::channel::mpsc;
+use futures::stream::{self, StreamExt};
+use serde_json::json;
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
+use tokio_util::sync::CancellationToken;
+
+struct LocalProvider {
+    replies: Mutex<VecDeque<LlmEvent>>,
+}
+
+impl LocalProvider {
+    fn new(replies: Vec<LlmEvent>) -> Self {
+        Self {
+            replies: Mutex::new(replies.into()),
+        }
+    }
+}
+
+impl barry_llm::Provider for LocalProvider {
+    fn stream(
+        &self,
+        _req: LlmRequest,
+        _cancel: CancellationToken,
+    ) -> futures::stream::BoxStream<'static, Result<LlmEvent, barry_llm::LlmError>> {
+        let reply = self
+            .replies
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("no more replies");
+        stream::iter(vec![Ok(reply)]).boxed()
+    }
+}
+
+struct LocalApprover;
+impl Approver for LocalApprover {
+    fn decide(
+        &self,
+        _req: &barry_protocol::ApprovalRequest,
+    ) -> BoxFuture<'_, barry_protocol::ApprovalChoice> {
+        Box::pin(async { barry_protocol::ApprovalChoice::Once })
+    }
+}
+
+fn done_bash(command: &str) -> LlmEvent {
+    LlmEvent::Done {
+        message: Message::Assistant {
+            content: None,
+            reasoning: None,
+            tool_calls: vec![barry_protocol::ToolCall {
+                id: "call_1".to_string(),
+                name: "bash".to_string(),
+                arguments: json!({ "command": command }),
+            }],
+        },
+        stop: StopReason::ToolCalls,
+        usage: None,
+    }
+}
+
+fn done_text(text: &str) -> LlmEvent {
+    LlmEvent::Done {
+        message: Message::Assistant {
+            content: Some(text.to_string()),
+            reasoning: None,
+            tool_calls: vec![],
+        },
+        stop: StopReason::Stop,
+        usage: None,
+    }
+}
+
+async fn collect_events(mut rx: mpsc::Receiver<Event>) -> Vec<Event> {
+    let mut events = Vec::new();
+    while let Some(event) = rx.next().await {
+        events.push(event);
+    }
+    events
+}
+
+#[tokio::test]
+async fn bc_2_3_bash_exit_1_continues_turn() {
+    let provider = Arc::new(LocalProvider::new(vec![
+        done_bash("false"),
+        LlmEvent::TextDelta("The command failed as expected.".to_string()),
+        done_text("The command failed as expected."),
+    ]));
+    let approver = Arc::new(LocalApprover);
+
+    let mut agent = Agent::new(
+        barry_core::config::Config {
+            default_model: "test".to_string(),
+            max_turns: 10,
+            dev_unsafe_bash: true,
+        },
+        provider.clone(),
+        approver,
+    )
+    .expect("agent constructs");
+
+    let (tx, rx) = mpsc::channel(32);
+    let stop = agent
+        .run_turn("run false", tx, CancellationToken::new())
+        .await
+        .expect("ok");
+    assert_eq!(stop, StopReason::Stop);
+
+    let events = collect_events(rx).await;
+
+    // ToolFinished with ok=false
+    let failed: Vec<&Event> = events
+        .iter()
+        .filter(|e| matches!(e, Event::ToolFinished { ok: false, .. }))
+        .collect();
+    assert_eq!(failed.len(), 1, "expected one failed ToolFinished");
+
+    // The tool result display contains the exit code
+    let has_exit_code = events.iter().any(|e| {
+        matches!(
+            e,
+            Event::ToolFinished { display, .. } if display.contains("exit 1")
+        )
+    });
+    assert!(has_exit_code, "expected exit 1 in tool result");
+
+    // Text delta from model's final answer
+    let text_deltas: Vec<&Event> = events
+        .iter()
+        .filter(|e| matches!(e, Event::TextDelta(_)))
+        .collect();
+    assert_eq!(text_deltas.len(), 1);
+
+    // One TurnFinished
+    let finished: Vec<&Event> = events
+        .iter()
+        .filter(|e| matches!(e, Event::TurnFinished { .. }))
+        .collect();
+    assert_eq!(finished.len(), 1);
+}
