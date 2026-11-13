@@ -15,6 +15,7 @@ use url::Url;
 use barry_core::config::Config;
 use barry_core::{Agent, Approver, BoxFuture};
 use barry_llm::{Compat, OpenAiProvider};
+use barry_policy::Policy;
 use barry_protocol::{ApprovalChoice, ApprovalRequest, Event, StopReason};
 
 /// Default endpoint until PLAN 6.8 (named model profiles) lands in M6.
@@ -174,7 +175,21 @@ async fn run_headless(cfg: Config, prompt: String, json: bool, model: Option<Str
             ..Compat::default()
         },
     ));
-    let mut agent = match Agent::new(cfg, provider, Arc::new(HeadlessApprover), None) {
+
+    // Build the sandbox policy from config. Headless mode never trusts
+    // project config, so only defaults + config file values apply.
+    let policy = Policy::new(barry_policy::PolicyConfig {
+        cwd: std::env::current_dir().unwrap_or_default(),
+        home: std::env::var("HOME").map(PathBuf::from).unwrap_or_default(),
+        extra_writable: vec![],
+        read_deny: cfg.fs_read_deny.clone(),
+        protected: cfg.fs_protected.clone(),
+        rules: vec![],
+        network: cfg.sandbox_network,
+    })
+    .expect("policy constructs");
+
+    let mut agent = match Agent::new(cfg, provider, Arc::new(HeadlessApprover), Some(policy)) {
         Ok(agent) => agent,
         Err(err) => {
             eprintln!("{err}");

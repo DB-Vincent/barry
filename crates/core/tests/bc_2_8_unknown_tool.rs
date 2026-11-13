@@ -102,7 +102,9 @@ async fn bc_2_8_unknown_tool_is_ok_false_result() {
         Config {
             default_model: "test".to_string(),
             max_turns: 10,
-            dev_unsafe_bash: false,
+            sandbox_network: true,
+            fs_read_deny: vec![],
+            fs_protected: vec![],
         },
         provider.clone(),
         Arc::new(LocalApprover),

@@ -33,6 +33,14 @@ pub(crate) fn command(
     cmd.arg("--dev").arg("/dev");
     cmd.arg("--proc").arg("/proc");
 
+    // Protected paths mounted read-only FIRST, so that writable roots
+    // (including grants) can override them when bind-mounted afterwards.
+    for p in &spec.protected_ro {
+        if p.exists() {
+            cmd.arg("--ro-bind").arg(p).arg(p);
+        }
+    }
+
     // Each writable root is bind-mounted read-write so writes inside it
     // affect the host. TMPDIR is also bind-mounted so temp files work.
     let mut roots: Vec<PathBuf> = spec.writable_roots.to_vec();
@@ -46,13 +54,6 @@ pub(crate) fn command(
     }
     for root in &roots {
         cmd.arg("--bind").arg(root).arg(root);
-    }
-
-    // Protected paths mounted read-only.
-    for p in &spec.protected_ro {
-        if p.exists() {
-            cmd.arg("--ro-bind").arg(p).arg(p);
-        }
     }
 
     // Read-deny directories masked with tmpfs; read-deny files masked with /dev/null.
@@ -78,6 +79,10 @@ pub(crate) fn command(
         .arg("--chdir")
         .arg(&spec.cwd);
 
+    // Environment: clear all variables, then set only a minimal safe set.
+    // This prevents secrets (API keys, tokens) from leaking into the sandbox.
+    let env_cmd = build_sandbox_env(shell_command);
+
     // Re-exec barry as the sandbox helper, which installs seccomp and runs the command.
     let barry_exe = std::env::current_exe()
         .map_err(|e| SandboxError::Other(format!("cannot determine barry executable path: {e}")))?;
@@ -87,12 +92,46 @@ pub(crate) fn command(
         .arg("--")
         .arg("/bin/sh")
         .arg("-c")
-        .arg(shell_command);
+        .arg(env_cmd);
 
     cmd.stdin(Stdio::null());
     cmd.process_group(0);
 
     Ok(cmd)
+}
+
+/// Build the inner shell command that runs under `env -i` to strip secrets.
+///
+/// The outer `/bin/sh -c` (passed by the sandbox helper) runs this, which
+/// clears the environment and sets only PATH, HOME, USER, LANG, LC_ALL, TERM,
+/// TMPDIR before executing the user's command.
+fn build_sandbox_env(shell_command: &str) -> String {
+    let path_var = std::env::var("PATH").unwrap_or_default();
+    let home_var = std::env::var("HOME").unwrap_or_default();
+    let user_var = std::env::var("USER").unwrap_or_else(|_| "root".to_string());
+    let lang_var = std::env::var("LANG").unwrap_or_else(|_| "C.UTF-8".to_string());
+    let lc_all_var = std::env::var("LC_ALL").unwrap_or_default();
+    let term_var = std::env::var("TERM").unwrap_or_default();
+    let tmpdir_var = std::env::var("TMPDIR").unwrap_or_default();
+
+    format!(
+        "env -i PATH={} HOME={} USER={} LANG={} LC_ALL={} TERM={} TMPDIR={} /bin/sh -c {}",
+        shell_escape(&path_var),
+        shell_escape(&home_var),
+        shell_escape(&user_var),
+        shell_escape(&lang_var),
+        shell_escape(&lc_all_var),
+        shell_escape(&term_var),
+        shell_escape(&tmpdir_var),
+        shell_escape(shell_command)
+    )
+}
+
+/// Wrap a string in single quotes for safe shell interpolation.
+/// Any single quotes in the input are escaped by ending the quote,
+/// adding an escaped quote, and starting a new quote.
+fn shell_escape(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 /// Locate `bwrap` on `PATH`. Fail closed if not found.

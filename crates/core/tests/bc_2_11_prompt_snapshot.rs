@@ -106,7 +106,9 @@ async fn bc_2_11_tool_list_is_exact_and_prompt_matches_snapshot() {
         Config {
             default_model: "test".to_string(),
             max_turns: 10,
-            dev_unsafe_bash: false,
+            sandbox_network: true,
+            fs_read_deny: vec![],
+            fs_protected: vec![],
         },
         provider.clone(),
         Arc::new(LocalApprover),
