@@ -6,7 +6,7 @@
 
 mod path;
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use thiserror::Error;
 
 pub use barry_protocol::Decision;
@@ -166,8 +166,28 @@ impl Policy {
     pub fn grant_dir(&mut self, dir: &Path) -> Result<(), PolicyError> {
         let canonical = match canonicalise(&self.cwd, dir) {
             Ok(c) => c,
+            Err(PathError::DotDot { .. }) => {
+                // `..` components are rejected by canonicalise (PLAN 6.1.1),
+                // but grant_dir is user-initiated explicit permission, so
+                // resolve `..` manually by walking up from cwd.
+                let mut current = self.cwd.clone();
+                for component in dir.components() {
+                    match component {
+                        Component::ParentDir => {
+                            current.pop();
+                        }
+                        Component::Normal(c) => {
+                            current.push(c);
+                        }
+                        _ => {}
+                    }
+                }
+                current
+            }
             Err(_) => return Err(PolicyError::InvalidPath(dir.to_path_buf())),
         };
+        // Create the directory if it doesn't exist so bwrap can bind-mount it.
+        let _ = std::fs::create_dir_all(&canonical);
         self.grants.push(canonical.clone());
         self.writable_roots.push(canonical);
         Ok(())

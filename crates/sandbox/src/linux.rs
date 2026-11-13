@@ -84,8 +84,12 @@ pub(crate) fn command(
     let env_cmd = build_sandbox_env(shell_command);
 
     // Re-exec barry as the sandbox helper, which installs seccomp and runs the command.
-    let barry_exe = std::env::current_exe()
-        .map_err(|e| SandboxError::Other(format!("cannot determine barry executable path: {e}")))?;
+    // BARRY_BIN_OVERRIDE lets tests point to the real barry binary.
+    let barry_exe = std::env::var("BARRY_BIN_OVERRIDE")
+        .ok()
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_exe().ok())
+        .ok_or_else(|| SandboxError::Other("cannot determine barry executable path".into()))?;
     cmd.arg("--")
         .arg(&barry_exe)
         .arg("__sandbox-exec")

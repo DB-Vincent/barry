@@ -32,6 +32,7 @@ pub enum SandboxError {
 }
 
 /// Specification for a sandboxed command execution.
+#[derive(Clone)]
 pub struct SandboxSpec {
     /// Session working directory.
     pub cwd: PathBuf,
