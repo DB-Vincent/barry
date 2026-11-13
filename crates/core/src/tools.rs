@@ -27,6 +27,16 @@ impl ToolResult {
             display: "interrupted by user".to_string(),
         }
     }
+
+    /// Turns a tool error into a result for the model. PLAN 5: panics and
+    /// errors inside a tool never abort the turn, they become ok:false.
+    pub(crate) fn internal_error(err: &CoreError) -> Self {
+        Self {
+            ok: false,
+            content: format!("internal tool error: {err}"),
+            display: "internal tool error".to_string(),
+        }
+    }
 }
 
 pub(crate) fn system_prompt() -> String {

@@ -11,7 +11,7 @@ use futures::stream::StreamExt;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
-use crate::tools::{execute_tool, system_prompt, tool_specs};
+use crate::tools::{execute_tool, system_prompt, tool_specs, ToolResult};
 use crate::{Approver, CoreError};
 
 /// The main agent that drives the turn loop.
@@ -146,9 +146,11 @@ impl Agent {
                                         .await
                                         .map_err(|_| CoreError::ChannelClosed)?;
 
+                                    // A tool error is a result, not a turn failure.
                                     let result =
                                         execute_tool(call, &self.cfg, &self.approver, &cancel)
-                                            .await?;
+                                            .await
+                                            .unwrap_or_else(|err| ToolResult::internal_error(&err));
 
                                     events
                                         .send(Event::ToolFinished {
