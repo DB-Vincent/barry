@@ -17,7 +17,7 @@ macro_rules! rule_case {
         #[test]
         fn $name() {
             let policy = Policy::new(config()).unwrap();
-            let decision = policy.check_bash($cmd);
+            let (decision, _rule_id) = policy.check_bash($cmd);
             assert!(
                 matches!(decision, $expected),
                 "command {:?} should match {:?}, got {:?}",

@@ -17,6 +17,8 @@ pub use path::{canonicalise, is_under, PathError};
 pub enum PolicyError {
     #[error("invalid path: {0:?}")]
     InvalidPath(PathBuf),
+    #[error("invalid rule {id}: {reason}")]
+    InvalidRule { id: String, reason: String },
 }
 
 /// Configuration for the policy engine (PLAN 6.1).
@@ -50,6 +52,16 @@ pub struct Policy {
 
 impl Policy {
     pub fn new(cfg: PolicyConfig) -> Result<Self, PolicyError> {
+        // Validate rules: each rule's `match` must be non-empty
+        for rule in &cfg.rules {
+            if rule.r#match.is_empty() {
+                return Err(PolicyError::InvalidRule {
+                    id: rule.id.clone(),
+                    reason: "empty match pattern".into(),
+                });
+            }
+        }
+
         let read_deny = cfg
             .read_deny
             .iter()
@@ -153,7 +165,8 @@ impl Policy {
     }
 
     /// Check a bash command against the rule table. Deny > ask > allow.
-    pub fn check_bash(&self, command: &str) -> Decision {
+    /// Returns the decision and, if a configured rule decided, its id.
+    pub fn check_bash(&self, command: &str) -> (Decision, Option<String>) {
         // 1. Deny rules (substring match on the full command)
         let deny_rules = [
             "sudo",
@@ -170,16 +183,19 @@ impl Policy {
         ];
         for &rule in &deny_rules {
             if command.contains(rule) {
-                return Decision::Deny {
-                    reason: format!("command matches deny rule: {rule}"),
-                };
+                return (
+                    Decision::Deny {
+                        reason: format!("command matches deny rule: {rule}"),
+                    },
+                    None,
+                );
             }
         }
 
         // 2. Configured rules (exact match on `match` field)
         for rule in &self.rules {
             if command == rule.r#match {
-                return rule.decision.clone();
+                return (rule.decision.clone(), Some(rule.id.clone()));
             }
         }
 
@@ -187,9 +203,12 @@ impl Policy {
         let dangerous = ["$(", "`", ">", ">>", "-delete"];
         for &pattern in &dangerous {
             if command.contains(pattern) {
-                return Decision::Ask {
-                    reason: format!("command contains dangerous construct: {pattern}"),
-                };
+                return (
+                    Decision::Ask {
+                        reason: format!("command contains dangerous construct: {pattern}"),
+                    },
+                    None,
+                );
             }
         }
 
@@ -242,13 +261,16 @@ impl Policy {
             let starts_with_allow = allow_prefixes.iter().any(|&p| segment.starts_with(p));
             let contains_allow = allow_contains.iter().any(|&c| segment.contains(c));
             if !starts_with_allow && !contains_allow {
-                return Decision::Ask {
-                    reason: format!("no matching allow rule for segment: {segment}"),
-                };
+                return (
+                    Decision::Ask {
+                        reason: format!("no matching allow rule for segment: {segment}"),
+                    },
+                    None,
+                );
             }
         }
 
-        Decision::Allow
+        (Decision::Allow, None)
     }
 }
 

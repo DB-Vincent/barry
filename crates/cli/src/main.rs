@@ -114,17 +114,30 @@ fn run_command(command: Commands) -> ExitCode {
                     rules: vec![],
                 };
                 let policy = barry_policy::Policy::new(cfg).expect("policy");
-                match policy.check_bash(&command) {
+                let (decision, rule_id) = policy.check_bash(&command);
+                match decision {
                     barry_protocol::Decision::Allow => {
-                        println!("allow");
+                        if let Some(id) = &rule_id {
+                            println!("allow (rule: {id})");
+                        } else {
+                            println!("allow");
+                        }
                         ExitCode::SUCCESS
                     }
                     barry_protocol::Decision::Deny { reason } => {
-                        eprintln!("deny: {reason}");
+                        if let Some(id) = &rule_id {
+                            eprintln!("deny: {reason} (rule: {id})");
+                        } else {
+                            eprintln!("deny: {reason}");
+                        }
                         ExitCode::from(1)
                     }
                     barry_protocol::Decision::Ask { reason } => {
-                        eprintln!("ask: {reason}");
+                        if let Some(id) = &rule_id {
+                            eprintln!("ask: {reason} (rule: {id})");
+                        } else {
+                            eprintln!("ask: {reason}");
+                        }
                         ExitCode::from(1)
                     }
                 }
