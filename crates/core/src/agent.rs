@@ -15,10 +15,16 @@ use crate::tools::{execute_tool, system_prompt, tool_specs};
 use crate::{Approver, CoreError};
 
 /// The main agent that drives the turn loop.
+///
+/// `history` outlives a single turn: the M2 REPL and BC-2.9 both need the
+/// next request to carry what happened in the previous one (notably the
+/// "interrupted by user" tool result of a cancelled command). The system
+/// prompt is not stored; it is prepended to every request.
 pub struct Agent {
     pub(crate) cfg: Config,
     provider: Arc<dyn Provider>,
     pub(crate) approver: Arc<dyn Approver>,
+    history: Vec<Message>,
 }
 
 impl Agent {
@@ -31,6 +37,7 @@ impl Agent {
             cfg,
             provider,
             approver,
+            history: Vec::new(),
         })
     }
 
@@ -51,14 +58,9 @@ impl Agent {
         mut events: mpsc::Sender<Event>,
         cancel: CancellationToken,
     ) -> Result<StopReason, CoreError> {
-        let mut messages = vec![
-            Message::System {
-                content: system_prompt(),
-            },
-            Message::User {
-                content: user_input.to_string(),
-            },
-        ];
+        self.history.push(Message::User {
+            content: user_input.to_string(),
+        });
 
         let tools = tool_specs(); // read, write, edit, bash, agent
 
@@ -68,8 +70,14 @@ impl Agent {
                 .await
                 .map_err(|_| CoreError::ChannelClosed)?;
 
+            let mut messages = Vec::with_capacity(self.history.len() + 1);
+            messages.push(Message::System {
+                content: system_prompt(),
+            });
+            messages.extend(self.history.iter().cloned());
+
             let req = LlmRequest {
-                messages: messages.clone(),
+                messages,
                 tools: tools.clone(),
             };
             let mut stream = self.provider.stream(req, cancel.clone());
@@ -91,7 +99,7 @@ impl Agent {
                             .map_err(|_| CoreError::ChannelClosed)?;
                     }
                     LlmEvent::Done { message, stop, .. } => {
-                        messages.push(message.clone());
+                        self.history.push(message.clone());
 
                         match stop {
                             StopReason::Stop => {
@@ -107,6 +115,27 @@ impl Agent {
                                     _ => Vec::new(),
                                 };
                                 for call in &tool_calls {
+                                    // Once a cancel lands, the remaining calls are not
+                                    // executed, but each still gets a Tool message: the
+                                    // model rejects a reply whose call ids are not all
+                                    // answered, so the history must stay well formed.
+                                    if cancel.is_cancelled() {
+                                        events
+                                            .send(Event::ToolFinished {
+                                                id: call.id.clone(),
+                                                ok: false,
+                                                display: "interrupted by user".to_string(),
+                                            })
+                                            .await
+                                            .map_err(|_| CoreError::ChannelClosed)?;
+                                        self.history.push(Message::Tool {
+                                            tool_call_id: call.id.clone(),
+                                            content: "interrupted by user".to_string(),
+                                            ok: false,
+                                        });
+                                        continue;
+                                    }
+
                                     let display = format!("{} {}", call.name, call.arguments);
                                     events
                                         .send(Event::ToolStarted {
@@ -118,7 +147,8 @@ impl Agent {
                                         .map_err(|_| CoreError::ChannelClosed)?;
 
                                     let result =
-                                        execute_tool(call, &self.cfg, &self.approver).await?;
+                                        execute_tool(call, &self.cfg, &self.approver, &cancel)
+                                            .await?;
 
                                     events
                                         .send(Event::ToolFinished {
@@ -129,11 +159,22 @@ impl Agent {
                                         .await
                                         .map_err(|_| CoreError::ChannelClosed)?;
 
-                                    messages.push(Message::Tool {
+                                    self.history.push(Message::Tool {
                                         tool_call_id: call.id.clone(),
                                         content: result.content,
                                         ok: result.ok,
                                     });
+                                }
+
+                                if cancel.is_cancelled() {
+                                    events
+                                        .send(Event::TurnFinished {
+                                            stop: StopReason::Aborted,
+                                            usage: None,
+                                        })
+                                        .await
+                                        .map_err(|_| CoreError::ChannelClosed)?;
+                                    return Ok(StopReason::Aborted);
                                 }
                                 // loop continues: call LLM again with tool results
                             }

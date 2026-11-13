@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use barry_protocol::{ToolCall, ToolSpec};
 use serde_json::json;
+use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
 use crate::context::truncate;
@@ -15,6 +16,17 @@ pub(crate) struct ToolResult {
     pub(crate) ok: bool,
     pub(crate) content: String,
     pub(crate) display: String,
+}
+
+impl ToolResult {
+    /// The result recorded for a call that was cut short by cancellation.
+    pub(crate) fn interrupted() -> Self {
+        Self {
+            ok: false,
+            content: "interrupted by user".to_string(),
+            display: "interrupted by user".to_string(),
+        }
+    }
 }
 
 pub(crate) fn system_prompt() -> String {
@@ -87,6 +99,7 @@ pub(crate) async fn execute_tool(
     call: &ToolCall,
     cfg: &Config,
     _approver: &Arc<dyn Approver>,
+    cancel: &CancellationToken,
 ) -> Result<ToolResult, CoreError> {
     match call.name.as_str() {
         "read" => {
@@ -152,7 +165,7 @@ pub(crate) async fn execute_tool(
                 .and_then(|v| v.as_u64())
                 .map(|secs| secs.clamp(1, 600))
                 .unwrap_or(120);
-            execute_bash(command, timeout_secs).await
+            execute_bash(command, timeout_secs, cancel).await
         }
         _ => Ok(ToolResult {
             ok: false,
@@ -226,7 +239,20 @@ async fn execute_edit(
     }
 }
 
-async fn execute_bash(command: &str, timeout_secs: u64) -> Result<ToolResult, CoreError> {
+/// Sends SIGKILL to a whole process group. The child is spawned with
+/// `process_group(0)`, so `-<pid>` reaches the shell and everything it started.
+fn kill_process_group(pid: u32) {
+    let _ = std::process::Command::new("kill")
+        .arg("-KILL")
+        .arg(format!("-{pid}"))
+        .output();
+}
+
+async fn execute_bash(
+    command: &str,
+    timeout_secs: u64,
+    cancel: &CancellationToken,
+) -> Result<ToolResult, CoreError> {
     let child = tokio::process::Command::new("/bin/sh")
         .arg("-c")
         .arg(command)
@@ -238,48 +264,54 @@ async fn execute_bash(command: &str, timeout_secs: u64) -> Result<ToolResult, Co
 
     let child_id = child.id().unwrap_or(0);
 
-    let result =
-        tokio::time::timeout(Duration::from_secs(timeout_secs), child.wait_with_output()).await;
+    // `wait_with_output` consumes the child, so it moves into the racing future.
+    // Once that future is dropped (cancel arm) the only handle left is the pid,
+    // which is why the group is killed by pid rather than via `child.kill()`.
+    let wait = async move { child.wait_with_output().await };
 
-    match result {
-        Ok(Ok(output)) => {
-            let exit_code = output.status.code().unwrap_or(-1);
-            // Bind the Cow temporaries: `truncate` borrows from them, so they
-            // must outlive the returned Cow.
-            let stdout_raw = String::from_utf8_lossy(&output.stdout);
-            let stderr_raw = String::from_utf8_lossy(&output.stderr);
-            let stdout = truncate(&stdout_raw, 30_000);
-            let stderr = truncate(&stderr_raw, 30_000);
-
-            if exit_code == 0 {
-                Ok(ToolResult {
-                    ok: true,
-                    content: stdout.into_owned(),
-                    display: format!("bash exit {exit_code}"),
-                })
-            } else {
-                Ok(ToolResult {
-                    ok: false,
-                    content: format!("exit_code: {exit_code}\nstderr: {stderr}"),
-                    display: format!("bash exit {exit_code}"),
-                })
-            }
+    tokio::select! {
+        biased;
+        () = cancel.cancelled() => {
+            kill_process_group(child_id);
+            Ok(ToolResult::interrupted())
         }
-        Ok(Err(io_err)) => Err(CoreError::Provider(format!(
-            "failed to read bash output: {io_err}"
-        ))),
-        Err(_elapsed) => {
-            // Timeout: kill the child's process group (background children too).
-            let _ = std::process::Command::new("kill")
-                .arg("-KILL")
-                .arg(format!("-{child_id}"))
-                .output();
+        result = tokio::time::timeout(Duration::from_secs(timeout_secs), wait) => {
+            match result {
+                Ok(Ok(output)) => {
+                    let exit_code = output.status.code().unwrap_or(-1);
+                    // Bind the Cow temporaries: `truncate` borrows from them, so they
+                    // must outlive the returned Cow.
+                    let stdout_raw = String::from_utf8_lossy(&output.stdout);
+                    let stderr_raw = String::from_utf8_lossy(&output.stderr);
+                    let stdout = truncate(&stdout_raw, 30_000);
+                    let stderr = truncate(&stderr_raw, 30_000);
 
-            Ok(ToolResult {
-                ok: false,
-                content: format!("timed out after {timeout_secs}s"),
-                display: format!("bash timed out after {timeout_secs}s"),
-            })
+                    if exit_code == 0 {
+                        Ok(ToolResult {
+                            ok: true,
+                            content: stdout.into_owned(),
+                            display: format!("bash exit {exit_code}"),
+                        })
+                    } else {
+                        Ok(ToolResult {
+                            ok: false,
+                            content: format!("exit_code: {exit_code}\nstderr: {stderr}"),
+                            display: format!("bash exit {exit_code}"),
+                        })
+                    }
+                }
+                Ok(Err(io_err)) => Err(CoreError::Provider(format!(
+                    "failed to read bash output: {io_err}"
+                ))),
+                Err(_elapsed) => {
+                    kill_process_group(child_id);
+                    Ok(ToolResult {
+                        ok: false,
+                        content: format!("timed out after {timeout_secs}s"),
+                        display: format!("bash timed out after {timeout_secs}s"),
+                    })
+                }
+            }
         }
     }
 }
