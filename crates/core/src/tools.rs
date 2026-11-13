@@ -102,6 +102,24 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                 "required": ["command"]
             }),
         },
+        ToolSpec {
+            name: "agent".to_string(),
+            description: "Run a sub-agent on a task and return its final answer".to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": "The task for the sub-agent"
+                    },
+                    "allow_writes": {
+                        "type": "boolean",
+                        "description": "Allow the sub-agent to write files (default false)"
+                    }
+                },
+                "required": ["task"]
+            }),
+        },
     ]
 }
 
@@ -177,6 +195,14 @@ pub(crate) async fn execute_tool(
                 .unwrap_or(120);
             execute_bash(command, timeout_secs, cancel).await
         }
+        // Advertised (PLAN 5.1, BC-2.11) so the model can see the interface,
+        // but sub-agents arrive in M8 (PLAN 6.6). Say so plainly instead of
+        // letting it look like a typo.
+        "agent" => Ok(ToolResult {
+            ok: false,
+            content: "sub-agents are not available yet: the agent tool arrives in M8".to_string(),
+            display: "agent unavailable".to_string(),
+        }),
         _ => Ok(ToolResult {
             ok: false,
             content: format!("unknown tool: {}", call.name),
