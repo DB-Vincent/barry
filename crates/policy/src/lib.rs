@@ -154,7 +154,7 @@ impl Policy {
 
     /// Check a bash command against the rule table. Deny > ask > allow.
     pub fn check_bash(&self, command: &str) -> Decision {
-        // Default deny rules (substring match)
+        // 1. Deny rules (substring match on the full command)
         let deny_rules = [
             "sudo",
             "su",
@@ -164,6 +164,9 @@ impl Policy {
             "rm -rf /*",
             "chmod -R 777",
             "chown -R",
+            "| sh",
+            "| bash",
+            "git push --force",
         ];
         for &rule in &deny_rules {
             if command.contains(rule) {
@@ -173,14 +176,30 @@ impl Policy {
             }
         }
 
-        // Configured rules (exact match on `match` field)
+        // 2. Configured rules (exact match on `match` field)
         for rule in &self.rules {
             if command == rule.r#match {
                 return rule.decision.clone();
             }
         }
 
-        // Default allow rules (prefix match)
+        // 3. Dangerous shell constructs → Ask
+        let dangerous = ["$(", "`", ">", ">>", "-delete"];
+        for &pattern in &dangerous {
+            if command.contains(pattern) {
+                return Decision::Ask {
+                    reason: format!("command contains dangerous construct: {pattern}"),
+                };
+            }
+        }
+
+        // 4. Split by && || ; and check each segment against allow rules
+        let segments: Vec<&str> = command
+            .split(&['&', '|', ';'][..])
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
+
         let allow_prefixes = [
             "ls",
             "cat",
@@ -215,15 +234,21 @@ impl Policy {
             "cargo clippy",
             "cargo tree",
         ];
-        for &prefix in &allow_prefixes {
-            if command.starts_with(prefix) {
-                return Decision::Allow;
+
+        // Allow commands that can appear mid-command (e.g. after "timeout N")
+        let allow_contains = ["cargo test", "cargo check", "cargo build"];
+
+        for segment in &segments {
+            let starts_with_allow = allow_prefixes.iter().any(|&p| segment.starts_with(p));
+            let contains_allow = allow_contains.iter().any(|&c| segment.contains(c));
+            if !starts_with_allow && !contains_allow {
+                return Decision::Ask {
+                    reason: format!("no matching allow rule for segment: {segment}"),
+                };
             }
         }
 
-        Decision::Ask {
-            reason: "no matching rule".into(),
-        }
+        Decision::Allow
     }
 }
 
