@@ -134,7 +134,7 @@ pub(crate) async fn execute_tool(
                 .get("path")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            execute_read(path).await
+            execute_read_with_policy(path, policy).await
         }
         "write" => {
             let path = call
@@ -228,6 +228,35 @@ async fn execute_read(path: &str) -> Result<ToolResult, CoreError> {
         content: numbered.clone(),
         display: numbered,
     })
+}
+
+/// Run a read through the policy check before reading the file.
+async fn execute_read_with_policy(
+    path: &str,
+    policy: &Option<Policy>,
+) -> Result<ToolResult, CoreError> {
+    // No policy configured → no restrictions.
+    if let Some(policy) = policy {
+        match policy.check_read(Path::new(path)) {
+            Decision::Allow => {}
+            Decision::Deny { reason } => {
+                return Ok(ToolResult {
+                    ok: false,
+                    content: format!("read denied: {reason}"),
+                    display: "read denied".to_string(),
+                });
+            }
+            Decision::Ask { reason } => {
+                return Ok(ToolResult {
+                    ok: false,
+                    content: format!("read requires approval: {reason}"),
+                    display: "read requires approval".to_string(),
+                });
+            }
+        }
+    }
+
+    execute_read(path).await
 }
 
 async fn execute_write(path: &str, content: &str) -> Result<ToolResult, CoreError> {
