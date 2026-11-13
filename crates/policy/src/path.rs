@@ -100,9 +100,11 @@ mod tests {
         let cwd = std::env::temp_dir().join("barry-test-cwd");
         std::fs::create_dir_all(&cwd).unwrap();
         std::fs::create_dir_all(cwd.join("sub")).unwrap();
+        std::fs::write(cwd.join("sub/file.txt"), "").unwrap();
 
         let result = canonicalise(&cwd, std::path::Path::new("sub/file.txt")).unwrap();
-        assert_eq!(result, cwd.join("sub/file.txt"));
+        let expected = std::fs::canonicalize(cwd.join("sub/file.txt")).unwrap();
+        assert_eq!(result, expected);
     }
 
     #[test]
@@ -120,13 +122,16 @@ mod tests {
         let target = std::env::temp_dir().join("barry-test-symlink-target");
         std::fs::create_dir_all(&cwd).unwrap();
         std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("file.txt"), "").unwrap();
 
         let link = cwd.join("link");
         let _ = std::fs::remove_file(&link);
         std::os::unix::fs::symlink(&target, &link).unwrap();
 
         let result = canonicalise(&cwd, link.join("file.txt").as_path()).unwrap();
-        assert_eq!(result, target.join("file.txt"));
-        assert!(!is_under(&result, &cwd));
+        let expected = std::fs::canonicalize(target.join("file.txt")).unwrap();
+        assert_eq!(result, expected);
+        let canonical_cwd = std::fs::canonicalize(&cwd).unwrap();
+        assert!(!is_under(&result, &canonical_cwd));
     }
 }

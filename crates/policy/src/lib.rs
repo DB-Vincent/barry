@@ -69,11 +69,14 @@ impl Policy {
             .map(|entry| canonicalise_read_deny(&cfg.home, entry))
             .collect();
 
-        let mut writable_roots = vec![cfg.cwd.clone()];
-        writable_roots.extend(cfg.extra_writable.iter().cloned());
+        // Canonicalize cwd and writable roots so that is_under() comparisons
+        // work on macOS where /tmp is a symlink to /private/tmp (PLAN 6.1.1).
+        let cwd = canonicalize_or_keep(&cfg.cwd);
+        let mut writable_roots: Vec<PathBuf> = vec![cwd.clone()];
+        writable_roots.extend(cfg.extra_writable.iter().map(|r| canonicalize_or_keep(r)));
 
         Ok(Self {
-            cwd: cfg.cwd,
+            cwd,
             read_deny,
             protected: cfg.protected,
             writable_roots,
@@ -309,5 +312,15 @@ fn canonicalise_read_deny(home: &Path, entry: &str) -> PathBuf {
         std::fs::canonicalize(&path).unwrap_or(path)
     } else {
         path
+    }
+}
+
+/// Canonicalize `path` if it exists, otherwise return it unchanged.
+/// Ensures canonical-form comparisons work on macOS where /tmp -> /private/tmp.
+fn canonicalize_or_keep(path: &Path) -> PathBuf {
+    if path.exists() {
+        std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    } else {
+        path.to_path_buf()
     }
 }
