@@ -87,6 +87,7 @@ async fn bc_3_4_grant_does_not_carry_to_new_session() {
         read_deny: vec![],
         protected: vec![],
         rules: vec![],
+        network: true,
     })
     .expect("policy constructs");
 
@@ -127,6 +128,7 @@ async fn bc_3_4_grant_does_not_carry_to_new_session() {
         read_deny: vec![],
         protected: vec![],
         rules: vec![],
+        network: true,
     })
     .expect("policy constructs");
 

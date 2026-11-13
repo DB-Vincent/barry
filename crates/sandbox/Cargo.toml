@@ -5,3 +5,7 @@ edition = "2021"
 
 [dependencies]
 barry-protocol = { workspace = true }
+libc = { workspace = true }
+seccompiler = { workspace = true }
+tokio = { workspace = true, features = ["process"] }
+thiserror = { workspace = true }

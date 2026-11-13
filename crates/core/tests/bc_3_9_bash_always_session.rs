@@ -83,6 +83,7 @@ async fn bc_3_9_bash_always_this_session_persists_in_session() {
         read_deny: vec![],
         protected: vec![],
         rules: vec![],
+        network: true,
     })
     .expect("policy constructs");
 
@@ -157,6 +158,7 @@ async fn bc_3_9_bash_always_this_session_persists_in_session() {
         read_deny: vec![],
         protected: vec![],
         rules: vec![],
+        network: true,
     })
     .expect("policy constructs");
 

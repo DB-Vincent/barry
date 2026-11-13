@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
+use barry_sandbox::run_helper_if_invoked;
 use clap::Parser;
 use futures::channel::mpsc;
 use futures::stream::StreamExt;
@@ -35,9 +36,6 @@ struct Cli {
     /// Model id sent to the provider
     #[arg(long = "model")]
     model: Option<String>,
-    /// Allow bash to run without a sandbox. M2 only; removed in M4.
-    #[arg(long = "dev-unsafe-bash", hide = true)]
-    dev_unsafe_bash: bool,
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -73,8 +71,12 @@ impl Approver for HeadlessApprover {
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    // If re-executed as the sandbox helper (Linux bwrap target), install the
+    // seccomp filter and run the requested command, never returning.
+    run_helper_if_invoked();
+
     // Load config first; on error, exit 2 with a clean message.
-    let mut cfg = match Config::load() {
+    let cfg = match Config::load() {
         Ok(Some(cfg)) => cfg,
         Ok(None) => Config::default(),
         Err(err) => {
@@ -94,10 +96,6 @@ async fn main() -> ExitCode {
         return ExitCode::from(2);
     };
 
-    // A file on disk must not be able to turn off a safety property, so this
-    // flag is only ever applied from the command line (see Config).
-    cfg.dev_unsafe_bash = cli.dev_unsafe_bash;
-
     run_headless(cfg, prompt, cli.json, cli.model).await
 }
 
@@ -112,6 +110,7 @@ fn run_command(command: Commands) -> ExitCode {
                     read_deny: vec![],
                     protected: vec![],
                     rules: vec![],
+                    network: true,
                 };
                 let policy = barry_policy::Policy::new(cfg).expect("policy");
                 let (decision, rule_id) = policy.check_bash(&command);

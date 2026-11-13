@@ -93,6 +93,7 @@ async fn bc_3_7_read_deny_blocks_secret_and_allows_normal_outside_read() {
         read_deny: vec!["~/.ssh".to_string()],
         protected: vec![],
         rules: vec![],
+        network: true,
     })
     .expect("policy constructs");
     let policy2 = policy.clone();

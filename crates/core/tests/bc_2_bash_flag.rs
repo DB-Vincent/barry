@@ -1,9 +1,12 @@
-/// M2 (PLAN line 617) bash is unsandboxed and must sit behind the hidden
-/// `--dev-unsafe-bash` flag. Without it the tool is advertised but refuses to
-/// run, and the model is told why. With it the command runs normally.
+/// M4 bash runs inside the OS sandbox when a policy is configured, and
+/// unsandboxed when no policy is present. The sandbox helper re-executes the
+/// barry binary, so sandboxed execution is tested via integration tests
+/// against the built binary; unit tests here cover the unsandboxed path and
+/// the policy decision layer.
 use barry_core::config::Config;
 use barry_core::{Agent, Approver, BoxFuture};
 use barry_llm::{LlmEvent, LlmRequest};
+use barry_policy::{Decision, Policy, PolicyConfig};
 use barry_protocol::{Event, Message, StopReason};
 use futures::channel::mpsc;
 use futures::stream::{self, StreamExt};
@@ -92,8 +95,8 @@ async fn collect_events(mut rx: mpsc::Receiver<Event>) -> Vec<Event> {
 /// Runs one bash tool call and returns the stop reason, the events and every
 /// request the provider was handed.
 async fn run_once(
-    dev_unsafe_bash: bool,
     command: &str,
+    policy: Option<Policy>,
 ) -> (StopReason, Vec<Event>, Vec<LlmRequest>) {
     let provider = Arc::new(RecordingProvider::new(vec![
         done_bash(command),
@@ -105,11 +108,11 @@ async fn run_once(
         Config {
             default_model: "test".to_string(),
             max_turns: 10,
-            dev_unsafe_bash,
+            dev_unsafe_bash: false,
         },
         provider.clone(),
         approver,
-        None,
+        policy,
     )
     .expect("agent constructs");
 
@@ -135,34 +138,9 @@ fn tool_content(requests: &[LlmRequest]) -> Option<String> {
 }
 
 #[tokio::test]
-async fn bc_2_bash_refused_without_dev_unsafe_bash() {
-    let (stop, events, requests) = run_once(false, "echo PWNED").await;
-
-    assert_eq!(stop, StopReason::Stop);
-
-    let refused = events.iter().any(|e| {
-        matches!(
-            e,
-            Event::ToolFinished { ok: false, display, .. } if display.contains("bash disabled")
-        )
-    });
-    assert!(refused, "expected a refused bash call: {events:?}");
-
-    // The model is told how to enable it, and never sees the output.
-    let content = tool_content(&requests).expect("a request carries the tool result");
-    assert!(
-        content.contains("--dev-unsafe-bash"),
-        "refusal should name the flag: {content}"
-    );
-    assert!(
-        !content.contains("PWNED"),
-        "the command must not have run: {content}"
-    );
-}
-
-#[tokio::test]
-async fn bc_2_bash_runs_with_dev_unsafe_bash() {
-    let (stop, events, requests) = run_once(true, "echo hello").await;
+async fn bc_4_bash_runs_unsandboxed_without_policy() {
+    // With no policy, bash runs unsandboxed (backstop for headless/cli).
+    let (stop, events, _requests) = run_once("echo hello", None).await;
 
     assert_eq!(stop, StopReason::Stop);
 
@@ -170,7 +148,48 @@ async fn bc_2_bash_runs_with_dev_unsafe_bash() {
         .iter()
         .any(|e| matches!(e, Event::ToolFinished { ok: true, .. }));
     assert!(ran, "expected a successful bash call: {events:?}");
+}
+
+#[tokio::test]
+async fn bc_4_bash_policy_deny_blocks_command() {
+    // A bash deny rule blocks the command regardless of sandbox.
+    let policy = Policy::new(PolicyConfig {
+        cwd: std::env::temp_dir().join("barry-test-bash-cwd2"),
+        home: std::env::temp_dir().join("barry-test-bash-home2"),
+        extra_writable: vec![],
+        read_deny: vec![],
+        protected: vec![],
+        rules: vec![barry_policy::BashRule {
+            id: "no-echo".to_string(),
+            r#match: "echo hello".to_string(),
+            decision: Decision::Deny {
+                reason: "echo is blocked".to_string(),
+            },
+        }],
+        network: true,
+    })
+    .expect("policy constructs");
+
+    let (stop, events, requests) = run_once("echo hello", Some(policy)).await;
+
+    assert_eq!(stop, StopReason::Stop);
+
+    let denied = events.iter().any(|e| {
+        matches!(
+            e,
+            Event::ToolFinished { ok: false, display, .. }
+                if display.contains("bash denied")
+        )
+    });
+    assert!(denied, "expected bash to be denied: {events:?}");
 
     let content = tool_content(&requests).expect("a request carries the tool result");
-    assert!(content.contains("hello"), "expected stdout: {content}");
+    assert!(
+        content.contains("bash denied"),
+        "expected deny message: {content}"
+    );
+    assert!(
+        !content.contains("hello"),
+        "the command must not have run: {content}"
+    );
 }

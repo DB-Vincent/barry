@@ -92,6 +92,7 @@ async fn bc_3_3_grant_persists_in_session_same_dir_different_dir_asks() {
         read_deny: vec![],
         protected: vec![],
         rules: vec![],
+        network: true,
     })
     .expect("policy constructs");
 

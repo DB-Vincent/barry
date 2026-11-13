@@ -1,12 +1,13 @@
 //! Tool specs advertised to the model, and the executors behind them.
 
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
 use barry_policy::Policy;
 use barry_protocol::{ApprovalChoice, ApprovalRequest, Decision, ToolCall, ToolSpec};
+use barry_sandbox::{self as sandbox, SandboxSpec};
 use serde_json::json;
-use std::path::Path;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
@@ -122,7 +123,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
 
 pub(crate) async fn execute_tool(
     call: &ToolCall,
-    cfg: &Config,
+    _cfg: &Config,
     policy: &mut Option<Policy>,
     approver: &Arc<dyn Approver>,
     cancel: &CancellationToken,
@@ -171,16 +172,6 @@ pub(crate) async fn execute_tool(
             .await
         }
         "bash" => {
-            // Unsandboxed bash is a development-only capability (PLAN line 617).
-            // Refuse rather than omit the tool: the model should learn why the
-            // call did not run instead of silently not having the tool.
-            if !cfg.dev_unsafe_bash {
-                return Ok(ToolResult {
-                    ok: false,
-                    content: "bash is disabled: rerun barry with --dev-unsafe-bash".to_string(),
-                    display: "bash disabled (needs --dev-unsafe-bash)".to_string(),
-                });
-            }
             let command = call
                 .arguments
                 .get("command")
@@ -197,11 +188,27 @@ pub(crate) async fn execute_tool(
 
             // Policy check: deny > grant > ask > allow.
             let Some(policy) = policy.as_mut() else {
-                return execute_bash(command, timeout_secs, cancel).await;
+                // No policy → run unsandboxed (backstop for headless/cli
+                // without policy).
+                return execute_bash_none(command, timeout_secs, cancel).await;
             };
             let (decision, _rule_id) = policy.check_bash(command);
             match decision {
-                Decision::Allow => execute_bash(command, timeout_secs, cancel).await,
+                Decision::Allow => {
+                    let spec = SandboxSpec {
+                        cwd: policy.cwd().to_path_buf(),
+                        writable_roots: policy.writable_roots().to_vec(),
+                        read_deny: policy.read_deny_paths().to_vec(),
+                        protected_ro: policy
+                            .protected()
+                            .iter()
+                            .map(|p| policy.cwd().join(p))
+                            .filter(|p| p.exists())
+                            .collect(),
+                        network: policy.network(),
+                    };
+                    execute_bash_sandboxed(spec, command, timeout_secs, cancel).await
+                }
                 Decision::Deny { reason } => Ok(ToolResult {
                     ok: false,
                     content: format!("bash denied: {reason}"),
@@ -227,7 +234,19 @@ pub(crate) async fn execute_tool(
                             if let Some(first_word) = command.split_whitespace().next() {
                                 policy.approve_prefix(first_word);
                             }
-                            execute_bash(command, timeout_secs, cancel).await
+                            let spec = SandboxSpec {
+                                cwd: policy.cwd().to_path_buf(),
+                                writable_roots: policy.writable_roots().to_vec(),
+                                read_deny: policy.read_deny_paths().to_vec(),
+                                protected_ro: policy
+                                    .protected()
+                                    .iter()
+                                    .map(|p| policy.cwd().join(p))
+                                    .filter(|p| p.exists())
+                                    .collect(),
+                                network: policy.network(),
+                            };
+                            execute_bash_sandboxed(spec, command, timeout_secs, cancel).await
                         }
                     }
                 }
@@ -438,25 +457,46 @@ fn kill_process_group(pid: u32) {
         .output();
 }
 
-async fn execute_bash(
+/// Run bash directly (no sandbox). Used when no policy is configured.
+async fn execute_bash_none(
     command: &str,
     timeout_secs: u64,
     cancel: &CancellationToken,
 ) -> Result<ToolResult, CoreError> {
-    let child = tokio::process::Command::new("/bin/sh")
-        .arg("-c")
-        .arg(command)
-        .process_group(0)
-        .stdout(std::process::Stdio::piped())
+    let mut cmd = tokio::process::Command::new("/bin/sh");
+    cmd.arg("-c").arg(command);
+    run_bash_command(cmd, timeout_secs, cancel).await
+}
+
+/// Run bash inside the OS sandbox.
+async fn execute_bash_sandboxed(
+    spec: SandboxSpec,
+    command: &str,
+    timeout_secs: u64,
+    cancel: &CancellationToken,
+) -> Result<ToolResult, CoreError> {
+    let cmd = sandbox::command(&spec, command)
+        .map_err(|e| CoreError::Provider(format!("sandbox error: {e}")))?;
+    run_bash_command(cmd, timeout_secs, cancel).await
+}
+
+/// Common execution logic: spawn, race cancel vs timeout vs completion.
+async fn run_bash_command(
+    cmd: tokio::process::Command,
+    timeout_secs: u64,
+    cancel: &CancellationToken,
+) -> Result<ToolResult, CoreError> {
+    let mut cmd = cmd;
+    cmd.stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
+        .process_group(0);
+
+    let child = cmd
         .spawn()
-        .map_err(|e| CoreError::Provider(format!("failed to run /bin/sh: {e}")))?;
+        .map_err(|e| CoreError::Provider(format!("failed to run command: {e}")))?;
 
     let child_id = child.id().unwrap_or(0);
 
-    // `wait_with_output` consumes the child, so it moves into the racing future.
-    // Once that future is dropped (cancel arm) the only handle left is the pid,
-    // which is why the group is killed by pid rather than via `child.kill()`.
     let wait = async move { child.wait_with_output().await };
 
     tokio::select! {
@@ -469,15 +509,11 @@ async fn execute_bash(
             match result {
                 Ok(Ok(output)) => {
                     let exit_code = output.status.code().unwrap_or(-1);
-                    // Bind the Cow temporaries: `truncate` borrows from them, so they
-                    // must outlive the returned Cow.
                     let stdout_raw = String::from_utf8_lossy(&output.stdout);
                     let stderr_raw = String::from_utf8_lossy(&output.stderr);
                     let stdout = truncate(&stdout_raw, 30_000);
                     let stderr = truncate(&stderr_raw, 30_000);
 
-                    // PLAN 5.1: exit_code, stdout and stderr on both paths,
-                    // each stream truncated on its own.
                     let content =
                         format!("exit_code: {exit_code}\nstdout: {stdout}\nstderr: {stderr}");
                     Ok(ToolResult {
@@ -487,7 +523,7 @@ async fn execute_bash(
                     })
                 }
                 Ok(Err(io_err)) => Err(CoreError::Provider(format!(
-                    "failed to read bash output: {io_err}"
+                    "failed to read command output: {io_err}"
                 ))),
                 Err(_elapsed) => {
                     kill_process_group(child_id);

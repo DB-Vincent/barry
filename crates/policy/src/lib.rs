@@ -29,6 +29,8 @@ pub struct PolicyConfig {
     pub read_deny: Vec<String>,
     pub protected: Vec<String>,
     pub rules: Vec<BashRule>,
+    /// Whether sandboxed bash commands may access the network.
+    pub network: bool,
 }
 
 /// A bash rule: a `match` string against a command, with a decision.
@@ -49,6 +51,7 @@ pub struct Policy {
     grants: Vec<PathBuf>,
     bash_grants: Vec<String>,
     rules: Vec<BashRule>,
+    network: bool,
 }
 
 impl Policy {
@@ -83,6 +86,7 @@ impl Policy {
             grants: Vec::new(),
             bash_grants: Vec::new(),
             rules: cfg.rules,
+            network: cfg.network,
         })
     }
 
@@ -173,6 +177,31 @@ impl Policy {
     /// Commands starting with this prefix are allowed without asking.
     pub fn approve_prefix(&mut self, prefix: &str) {
         self.bash_grants.push(prefix.to_string());
+    }
+
+    /// Session working directory.
+    pub fn cwd(&self) -> &Path {
+        &self.cwd
+    }
+
+    /// Writable roots (cwd + extra + grants).
+    pub fn writable_roots(&self) -> &[PathBuf] {
+        &self.writable_roots
+    }
+
+    /// Read-deny paths (canonicalised).
+    pub fn read_deny_paths(&self) -> &[PathBuf] {
+        &self.read_deny
+    }
+
+    /// Protected path components (e.g. ".git").
+    pub fn protected(&self) -> &[String] {
+        &self.protected
+    }
+
+    /// Whether sandboxed bash commands may access the network.
+    pub fn network(&self) -> bool {
+        self.network
     }
 
     /// Check a bash command against the rule table. Deny > ask > allow.

@@ -15,6 +15,7 @@ fn bc_3_11_invalid_rule_match_fails_startup() {
             r#match: "".to_string(),
             decision: Decision::Allow,
         }],
+        network: true,
     };
 
     let result = Policy::new(cfg);
@@ -39,6 +40,7 @@ fn bc_3_11_valid_rule_matches_startup() {
             r#match: "npm install foo".to_string(),
             decision: Decision::Allow,
         }],
+        network: true,
     };
 
     let result = Policy::new(cfg);

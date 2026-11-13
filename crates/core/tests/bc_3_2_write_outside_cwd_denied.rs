@@ -85,6 +85,7 @@ async fn bc_3_2_write_outside_cwd_denied_by_user() {
         read_deny: vec![],
         protected: vec![],
         rules: vec![],
+        network: true,
     })
     .expect("policy constructs");
 

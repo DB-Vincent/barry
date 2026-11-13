@@ -89,6 +89,7 @@ async fn bc_3_6_protected_path_inside_cwd_asks() {
         read_deny: vec![],
         protected: vec![".git".to_string(), ".barry".to_string()],
         rules: vec![],
+        network: true,
     })
     .expect("policy constructs");
 
