@@ -97,6 +97,7 @@ async fn bc_2_3_bash_exit_1_continues_turn() {
         barry_core::config::Config {
             default_model: "test".to_string(),
             max_turns: 10,
+            dev_unsafe_bash: true,
         },
         provider.clone(),
         approver,

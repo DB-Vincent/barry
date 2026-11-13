@@ -104,6 +104,7 @@ async fn bc_2_2_edit_unique_match_changes_file() {
         barry_core::config::Config {
             default_model: "test".to_string(),
             max_turns: 10,
+            dev_unsafe_bash: false,
         },
         provider.clone(),
         approver,
@@ -147,6 +148,7 @@ async fn bc_2_2_edit_non_unique_no_change() {
         barry_core::config::Config {
             default_model: "test".to_string(),
             max_turns: 10,
+            dev_unsafe_bash: false,
         },
         provider,
         approver,

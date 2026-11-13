@@ -24,6 +24,21 @@ pub enum ConfigError {
 pub struct Config {
     pub default_model: String,
     pub max_turns: u64,
+    /// Allows the `bash` tool to run without a sandbox. Set only from the
+    /// hidden `--dev-unsafe-bash` CLI flag, never from the config file: a file
+    /// on disk must not be able to turn off a safety property. Removed in M4,
+    /// when bash runs inside the sandbox unconditionally.
+    pub dev_unsafe_bash: bool,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            default_model: "local".to_string(),
+            max_turns: 50,
+            dev_unsafe_bash: false,
+        }
+    }
 }
 
 impl Config {
@@ -50,9 +65,6 @@ impl Config {
             source,
         })?;
 
-        Ok(Some(Config {
-            default_model: "local".to_string(),
-            max_turns: 50,
-        }))
+        Ok(Some(Config::default()))
     }
 }

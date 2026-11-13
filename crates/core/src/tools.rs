@@ -85,7 +85,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
 
 pub(crate) async fn execute_tool(
     call: &ToolCall,
-    _cfg: &Config,
+    cfg: &Config,
     _approver: &Arc<dyn Approver>,
 ) -> Result<ToolResult, CoreError> {
     match call.name.as_str() {
@@ -129,6 +129,16 @@ pub(crate) async fn execute_tool(
             execute_edit(path, old_string, new_string).await
         }
         "bash" => {
+            // Unsandboxed bash is a development-only capability (PLAN line 617).
+            // Refuse rather than omit the tool: the model should learn why the
+            // call did not run instead of silently not having the tool.
+            if !cfg.dev_unsafe_bash {
+                return Ok(ToolResult {
+                    ok: false,
+                    content: "bash is disabled: rerun barry with --dev-unsafe-bash".to_string(),
+                    display: "bash disabled (needs --dev-unsafe-bash)".to_string(),
+                });
+            }
             let command = call
                 .arguments
                 .get("command")

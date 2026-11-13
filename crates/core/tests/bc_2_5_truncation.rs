@@ -103,6 +103,7 @@ async fn bc_2_5_large_output_is_truncated() {
         barry_core::config::Config {
             default_model: "test".to_string(),
             max_turns: 10,
+            dev_unsafe_bash: true,
         },
         provider.clone(),
         approver,
