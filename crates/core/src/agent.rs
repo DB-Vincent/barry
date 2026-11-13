@@ -11,7 +11,8 @@ use futures::stream::StreamExt;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
-use crate::tools::{execute_tool, system_prompt, tool_specs, ToolResult};
+use crate::prompt::{system_prompt, PromptContext};
+use crate::tools::{execute_tool, tool_specs, ToolResult};
 use crate::{Approver, CoreError};
 
 /// Wraps a tool result for the model (PLAN 5). Kept here rather than in
@@ -31,6 +32,8 @@ pub struct Agent {
     provider: Arc<dyn Provider>,
     pub(crate) approver: Arc<dyn Approver>,
     history: Vec<Message>,
+    /// Built once so every request carries the same prefix (PLAN 5.2).
+    system_prompt: String,
 }
 
 impl Agent {
@@ -39,11 +42,23 @@ impl Agent {
         provider: Arc<dyn Provider>,
         approver: Arc<dyn Approver>,
     ) -> Result<Self, CoreError> {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let date = crate::prompt::today();
+        let system_prompt = system_prompt(&PromptContext {
+            cwd: &cwd,
+            os: std::env::consts::OS,
+            date: &date,
+            // PLAN 6.5 and 6.7 fill these in.
+            agents_md_section: "",
+            skills_section: "",
+        });
+
         Ok(Self {
             cfg,
             provider,
             approver,
             history: Vec::new(),
+            system_prompt,
         })
     }
 
@@ -78,7 +93,7 @@ impl Agent {
 
             let mut messages = Vec::with_capacity(self.history.len() + 1);
             messages.push(Message::System {
-                content: system_prompt(),
+                content: self.system_prompt.clone(),
             });
             messages.extend(self.history.iter().cloned());
 

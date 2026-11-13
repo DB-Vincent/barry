@@ -39,11 +39,6 @@ impl ToolResult {
     }
 }
 
-pub(crate) fn system_prompt() -> String {
-    "You are a helpful coding agent. You have access to tools: read, write, edit, bash, agent."
-        .to_string()
-}
-
 pub(crate) fn tool_specs() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
