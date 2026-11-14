@@ -3,8 +3,6 @@
 //! Builds a `sandbox-exec` command line with a Seatbelt profile that
 //! restricts file, network, and process access according to `SandboxSpec`.
 
-use std::path::{Path, PathBuf};
-
 use crate::SandboxError;
 
 /// Build a `sandbox-exec` [`tokio::process::Command`] for `shell_command`.
@@ -28,16 +26,18 @@ pub(crate) fn command(
     );
 
     // Writable roots.
-    for (i, root) in spec.writable_roots.iter().enumerate() {
+    for i in 0..spec.writable_roots.len() {
         profile.push_str(&format!(
             "(allow file-write* (subpath (param \"WRITABLE_ROOT_{}\")))\n",
             i
         ));
     }
 
-    // Protected read-only paths.
+    // Protected read-only paths. Skip a protected deny when the user granted
+    // that path (or a parent), so a grant reliably overrides protection
+    // regardless of how Seatbelt resolves equal-specificity rules (BC-4.5).
     for (i, p) in spec.protected_ro.iter().enumerate() {
-        if p.exists() {
+        if p.exists() && !spec.grants.iter().any(|g| p.starts_with(g)) {
             profile.push_str(&format!(
                 "(deny file-write* (subpath (param \"PROTECTED_{}\")))\n",
                 i
@@ -45,9 +45,9 @@ pub(crate) fn command(
         }
     }
 
-    // Explicit grants are allowed *after* the protected denies so a grant
-    // overrides protection for exactly the directory the user approved
-    // (BC-4.5). The last matching rule wins in Seatbelt.
+    // Explicit grants are allowed after the protected denies. This also covers
+    // a grant that is a subdirectory of a protected path, and a grant outside
+    // every writable root (BC-4.2, BC-4.5).
     for (i, g) in spec.grants.iter().enumerate() {
         if g.exists() {
             profile.push_str(&format!(
@@ -78,7 +78,7 @@ pub(crate) fn command(
             .arg(format!("WRITABLE_ROOT_{}={}", i, root.display()));
     }
     for (i, p) in spec.protected_ro.iter().enumerate() {
-        if p.exists() {
+        if p.exists() && !spec.grants.iter().any(|g| p.starts_with(g)) {
             cmd.arg("-D")
                 .arg(format!("PROTECTED_{}={}", i, p.display()));
         }
@@ -112,10 +112,4 @@ pub(crate) fn command(
     cmd.process_group(0);
 
     Ok(cmd)
-}
-
-/// Not applicable on macOS (no re-exec helper needed; sandbox-exec handles
-/// everything in one invocation).
-pub(crate) fn run_helper_if_invoked() {
-    let _ = ();
 }
