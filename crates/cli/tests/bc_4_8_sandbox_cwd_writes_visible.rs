@@ -6,6 +6,10 @@ use serde_json::json;
 fn barry() -> tokio::process::Command {
     let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_barry"));
     cmd.env_remove("BARRY_CONFIG");
+    cmd.env(
+        "XDG_STATE_HOME",
+        std::env::temp_dir().join(format!("barry-cli-test-state-{}", std::process::id())),
+    );
     cmd
 }
 

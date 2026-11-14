@@ -13,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
 use crate::prompt::{system_prompt, PromptContext};
+use crate::session::{self, decided_by_label, decision_label, EntryKind, SessionError, SessionLog};
 use crate::tools::{execute_tool, tool_specs, ToolResult};
 use crate::{Approver, CoreError};
 
@@ -36,6 +37,8 @@ pub struct Agent {
     history: Vec<Message>,
     /// Built once so every request carries the same prefix (PLAN 5.2).
     system_prompt: String,
+    /// Audit log, when a session is being recorded (PLAN 6.7).
+    session: Option<SessionLog>,
 }
 
 impl Agent {
@@ -63,18 +66,75 @@ impl Agent {
             policy,
             history: Vec::new(),
             system_prompt,
+            session: None,
         })
     }
 
+    /// Attach an audit log and record `session_start` (PLAN 6.7).
+    pub fn with_session_log(mut self, mut log: SessionLog) -> Self {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let _ = log.append(EntryKind::SessionStart {
+            cwd: cwd.display().to_string(),
+            model: self.cfg.default_model.clone(),
+            barry_version: env!("CARGO_PKG_VERSION").to_string(),
+            policy_sha256: session::policy_fingerprint(self.policy.as_ref()),
+        });
+        self.session = Some(log);
+        self
+    }
+
+    /// Rebuild an agent from a session log (BC-5.5, PLAN 6.7).
     pub fn resume(
-        _cfg: crate::config::Config,
-        _provider: Arc<dyn Provider>,
-        _approver: Arc<dyn Approver>,
-        _session_file: &Path,
+        cfg: crate::config::Config,
+        provider: Arc<dyn Provider>,
+        approver: Arc<dyn Approver>,
+        policy: Option<Policy>,
+        session_file: &Path,
     ) -> Result<Self, CoreError> {
-        Err(CoreError::NotImplemented(
-            "Agent::resume not yet implemented".into(),
-        ))
+        let history = session::replay_history(session_file).map_err(session_error)?;
+        let log = SessionLog::open_append(session_file).map_err(session_error)?;
+
+        let mut agent = Self::new(cfg, provider, approver, policy)?;
+        agent.history = history;
+        agent.session = Some(log);
+        Ok(agent)
+    }
+
+    /// Append one entry, ignoring I/O failures so the turn can continue.
+    fn log(&mut self, kind: EntryKind) {
+        if let Some(session) = self.session.as_mut() {
+            let _ = session.append(kind);
+        }
+    }
+
+    /// Record the decision and result of one tool call (BC-5.1).
+    fn log_tool(&mut self, call: &barry_protocol::ToolCall, result: &ToolResult) {
+        if self.session.is_none() {
+            return;
+        }
+        self.log(EntryKind::ToolDecision {
+            call_id: call.id.clone(),
+            tool: call.name.clone(),
+            input: call.arguments.clone(),
+            decision: decision_label(&result.decision),
+            decided_by: decided_by_label(&result.decided_by),
+        });
+        if let Some(dir) = &result.grant {
+            self.log(EntryKind::Grant {
+                dir: dir.display().to_string(),
+            });
+        }
+        if let Some(prefix) = &result.prefix {
+            self.log(EntryKind::PrefixApproved {
+                prefix: prefix.clone(),
+            });
+        }
+        self.log(EntryKind::ToolResult {
+            call_id: call.id.clone(),
+            ok: result.ok,
+            bytes: result.content.len(),
+            exit_code: result.exit_code,
+        });
     }
 
     pub async fn run_turn(
@@ -83,8 +143,12 @@ impl Agent {
         mut events: mpsc::Sender<Event>,
         cancel: CancellationToken,
     ) -> Result<StopReason, CoreError> {
-        self.history.push(Message::User {
+        let user_message = Message::User {
             content: user_input.to_string(),
+        };
+        self.history.push(user_message.clone());
+        self.log(EntryKind::Message {
+            message: user_message,
         });
 
         let tools = tool_specs(); // read, write, edit, bash, agent
@@ -125,6 +189,9 @@ impl Agent {
                     }
                     LlmEvent::Done { message, stop, .. } => {
                         self.history.push(message.clone());
+                        self.log(EntryKind::Message {
+                            message: message.clone(),
+                        });
 
                         match stop {
                             StopReason::Stop => {
@@ -153,7 +220,9 @@ impl Agent {
                                             })
                                             .await
                                             .map_err(|_| CoreError::ChannelClosed)?;
-                                        self.history.push(Message::Tool {
+                                        let interrupted = ToolResult::interrupted();
+                                        self.log_tool(call, &interrupted);
+                                        let tool_message = Message::Tool {
                                             tool_call_id: call.id.clone(),
                                             content: wrap_tool_output(
                                                 &call.name,
@@ -161,6 +230,10 @@ impl Agent {
                                                 "interrupted by user",
                                             ),
                                             ok: false,
+                                        };
+                                        self.history.push(tool_message.clone());
+                                        self.log(EntryKind::Message {
+                                            message: tool_message,
                                         });
                                         continue;
                                     }
@@ -190,14 +263,16 @@ impl Agent {
                                         .send(Event::ToolFinished {
                                             id: call.id.clone(),
                                             ok: result.ok,
-                                            display: result.display,
+                                            display: result.display.clone(),
                                         })
                                         .await
                                         .map_err(|_| CoreError::ChannelClosed)?;
 
+                                    self.log_tool(call, &result);
+
                                     // PLAN 5: every result is wrapped, so the model can
                                     // tell tool output apart from conversation text.
-                                    self.history.push(Message::Tool {
+                                    let tool_message = Message::Tool {
                                         tool_call_id: call.id.clone(),
                                         content: wrap_tool_output(
                                             &call.name,
@@ -205,6 +280,10 @@ impl Agent {
                                             &result.content,
                                         ),
                                         ok: result.ok,
+                                    };
+                                    self.history.push(tool_message.clone());
+                                    self.log(EntryKind::Message {
+                                        message: tool_message,
                                     });
                                 }
 
@@ -240,10 +319,12 @@ impl Agent {
 
         // PLAN 5: the limit is a normal stop with a notice, not an error.
         // The CLI turns this notice into exit code 3 (BC-2.10).
+        let notice = "turn limit reached".to_string();
         events
-            .send(Event::Notice("turn limit reached".to_string()))
+            .send(Event::Notice(notice.clone()))
             .await
             .map_err(|_| CoreError::ChannelClosed)?;
+        self.log(EntryKind::Notice { text: notice });
         events
             .send(Event::TurnFinished {
                 stop: StopReason::Stop,
@@ -254,7 +335,12 @@ impl Agent {
         Ok(StopReason::Stop)
     }
 
-    pub fn session_path(&self) -> &Path {
-        Path::new("")
+    /// The audit log path, when this agent is recording a session.
+    pub fn session_path(&self) -> Option<&Path> {
+        self.session.as_ref().map(SessionLog::path)
     }
+}
+
+fn session_error(err: SessionError) -> CoreError {
+    CoreError::Session(err.to_string())
 }

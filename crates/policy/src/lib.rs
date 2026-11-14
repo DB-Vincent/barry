@@ -232,6 +232,11 @@ impl Policy {
         &self.protected
     }
 
+    /// Configured bash rules, in order.
+    pub fn rules(&self) -> &[BashRule] {
+        &self.rules
+    }
+
     /// Whether sandboxed bash commands may access the network.
     pub fn network(&self) -> bool {
         self.network

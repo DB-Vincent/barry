@@ -1,11 +1,11 @@
 //! Tool specs advertised to the model, and the executors behind them.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use barry_policy::Policy;
-use barry_protocol::{ApprovalChoice, ApprovalRequest, Decision, ToolCall, ToolSpec};
+use barry_protocol::{ApprovalChoice, ApprovalRequest, DecidedBy, Decision, ToolCall, ToolSpec};
 use barry_sandbox::{self as sandbox, SandboxSpec};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -19,26 +19,66 @@ pub(crate) struct ToolResult {
     pub(crate) ok: bool,
     pub(crate) content: String,
     pub(crate) display: String,
+    /// The policy decision that allowed, denied or asked about this call.
+    pub(crate) decision: Decision,
+    /// Who made that decision (rule, user, hook or default).
+    pub(crate) decided_by: DecidedBy,
+    /// Bash exit code, when the tool ran a command.
+    pub(crate) exit_code: Option<i32>,
+    /// A directory granted during this call, if any (BC-5.1).
+    pub(crate) grant: Option<PathBuf>,
+    /// A bash prefix approved during this call, if any.
+    pub(crate) prefix: Option<String>,
 }
 
 impl ToolResult {
+    fn new(ok: bool, content: String, display: String) -> Self {
+        Self {
+            ok,
+            content,
+            display,
+            decision: Decision::Allow,
+            decided_by: DecidedBy::Default,
+            exit_code: None,
+            grant: None,
+            prefix: None,
+        }
+    }
+
+    fn with_decision(mut self, decision: Decision, decided_by: DecidedBy) -> Self {
+        self.decision = decision;
+        self.decided_by = decided_by;
+        self
+    }
+
+    fn with_exit_code(mut self, exit_code: Option<i32>) -> Self {
+        self.exit_code = exit_code;
+        self
+    }
+
     /// The result recorded for a call that was cut short by cancellation.
     pub(crate) fn interrupted() -> Self {
-        Self {
-            ok: false,
-            content: "interrupted by user".to_string(),
-            display: "interrupted by user".to_string(),
-        }
+        Self::new(
+            false,
+            "interrupted by user".to_string(),
+            "interrupted by user".to_string(),
+        )
+        .with_decision(
+            Decision::Deny {
+                reason: "interrupted by user".to_string(),
+            },
+            DecidedBy::User,
+        )
     }
 
     /// Turns a tool error into a result for the model. PLAN 5: panics and
     /// errors inside a tool never abort the turn, they become ok:false.
     pub(crate) fn internal_error(err: &CoreError) -> Self {
-        Self {
-            ok: false,
-            content: format!("internal tool error: {err}"),
-            display: "internal tool error".to_string(),
-        }
+        Self::new(
+            false,
+            format!("internal tool error: {err}"),
+            "internal tool error".to_string(),
+        )
     }
 }
 
@@ -192,13 +232,18 @@ pub(crate) async fn execute_tool(
                 // without policy).
                 return execute_bash_none(command, timeout_secs, cancel).await;
             };
-            let (decision, _rule_id) = policy.check_bash(command);
+            let (decision, rule_id) = policy.check_bash(command);
+            let decided_by = rule_id
+                .clone()
+                .map(DecidedBy::Rule)
+                .unwrap_or(DecidedBy::Default);
             match decision {
-                Decision::Deny { reason } => Ok(ToolResult {
-                    ok: false,
-                    content: format!("bash denied: {reason}"),
-                    display: "bash denied".to_string(),
-                }),
+                Decision::Deny { reason } => Ok(ToolResult::new(
+                    false,
+                    format!("bash denied: {reason}"),
+                    "bash denied".to_string(),
+                )
+                .with_decision(Decision::Deny { reason }, decided_by)),
                 Decision::Ask { reason } => {
                     let req = ApprovalRequest {
                         id: call.id.clone(),
@@ -208,17 +253,24 @@ pub(crate) async fn execute_tool(
                         grant_path: None,
                     };
                     match approver.decide(&req).await {
-                        ApprovalChoice::Deny => Ok(ToolResult {
-                            ok: false,
-                            content: "denied by user".to_string(),
-                            display: "denied by user".to_string(),
-                        }),
+                        ApprovalChoice::Deny => Ok(ToolResult::new(
+                            false,
+                            "denied by user".to_string(),
+                            "denied by user".to_string(),
+                        )
+                        .with_decision(
+                            Decision::Deny {
+                                reason: "denied by user".to_string(),
+                            },
+                            DecidedBy::User,
+                        )),
                         ApprovalChoice::Once | ApprovalChoice::AlwaysThisSession => {
                             // Grant the first word of the command as a session prefix.
-                            if let Some(first_word) = command.split_whitespace().next() {
+                            let prefix = command.split_whitespace().next().map(str::to_string);
+                            if let Some(first_word) = &prefix {
                                 policy.approve_prefix(first_word);
                             }
-                            run_sandboxed_with_retry(
+                            let mut result = run_sandboxed_with_retry(
                                 policy,
                                 command,
                                 timeout_secs,
@@ -226,12 +278,16 @@ pub(crate) async fn execute_tool(
                                 approver,
                                 call.id.clone(),
                             )
-                            .await
+                            .await?;
+                            result.decision = Decision::Allow;
+                            result.decided_by = DecidedBy::User;
+                            result.prefix = prefix;
+                            Ok(result)
                         }
                     }
                 }
                 Decision::Allow => {
-                    run_sandboxed_with_retry(
+                    let mut result = run_sandboxed_with_retry(
                         policy,
                         command,
                         timeout_secs,
@@ -239,23 +295,38 @@ pub(crate) async fn execute_tool(
                         approver,
                         call.id.clone(),
                     )
-                    .await
+                    .await?;
+                    result.decision = Decision::Allow;
+                    result.decided_by = decided_by;
+                    Ok(result)
                 }
             }
         }
         // Advertised (PLAN 5.1, BC-2.11) so the model can see the interface,
         // but sub-agents arrive in M8 (PLAN 6.6). Say so plainly instead of
         // letting it look like a typo.
-        "agent" => Ok(ToolResult {
-            ok: false,
-            content: "sub-agents are not available yet: the agent tool arrives in M8".to_string(),
-            display: "agent unavailable".to_string(),
-        }),
-        _ => Ok(ToolResult {
-            ok: false,
-            content: format!("unknown tool: {}", call.name),
-            display: format!("unknown tool: {}", call.name),
-        }),
+        "agent" => Ok(ToolResult::new(
+            false,
+            "sub-agents are not available yet: the agent tool arrives in M8".to_string(),
+            "agent unavailable".to_string(),
+        )
+        .with_decision(
+            Decision::Deny {
+                reason: "sub-agents are not available yet".to_string(),
+            },
+            DecidedBy::Default,
+        )),
+        _ => Ok(ToolResult::new(
+            false,
+            format!("unknown tool: {}", call.name),
+            format!("unknown tool: {}", call.name),
+        )
+        .with_decision(
+            Decision::Deny {
+                reason: "unknown tool".to_string(),
+            },
+            DecidedBy::Default,
+        )),
     }
 }
 
@@ -270,11 +341,7 @@ async fn execute_read(path: &str) -> Result<ToolResult, CoreError> {
 
     let numbered = truncate(&numbered, 30_000).into_owned();
 
-    Ok(ToolResult {
-        ok: true,
-        content: numbered.clone(),
-        display: numbered,
-    })
+    Ok(ToolResult::new(true, numbered.clone(), numbered))
 }
 
 /// Run a read through the policy check before reading the file.
@@ -287,18 +354,23 @@ async fn execute_read_with_policy(
         match policy.check_read(Path::new(path)) {
             Decision::Allow => {}
             Decision::Deny { reason } => {
-                return Ok(ToolResult {
-                    ok: false,
-                    content: format!("read denied: {reason}"),
-                    display: "read denied".to_string(),
-                });
+                return Ok(ToolResult::new(
+                    false,
+                    format!("read denied: {reason}"),
+                    "read denied".to_string(),
+                )
+                .with_decision(
+                    Decision::Deny { reason },
+                    DecidedBy::Rule("read-deny".to_string()),
+                ));
             }
             Decision::Ask { reason } => {
-                return Ok(ToolResult {
-                    ok: false,
-                    content: format!("read requires approval: {reason}"),
-                    display: "read requires approval".to_string(),
-                });
+                return Ok(ToolResult::new(
+                    false,
+                    format!("read requires approval: {reason}"),
+                    "read requires approval".to_string(),
+                )
+                .with_decision(Decision::Ask { reason }, DecidedBy::Default));
             }
         }
     }
@@ -308,11 +380,11 @@ async fn execute_read_with_policy(
 
 async fn execute_write(path: &str, content: &str) -> Result<ToolResult, CoreError> {
     std::fs::write(path, content).map_err(|e| CoreError::Provider(e.to_string()))?;
-    Ok(ToolResult {
-        ok: true,
-        content: format!("wrote {} bytes to {}", content.len(), path),
-        display: format!("wrote {} bytes to {}", content.len(), path),
-    })
+    Ok(ToolResult::new(
+        true,
+        format!("wrote {} bytes to {}", content.len(), path),
+        format!("wrote {} bytes to {}", content.len(), path),
+    ))
 }
 
 async fn execute_edit(
@@ -324,31 +396,31 @@ async fn execute_edit(
     let count = content.matches(old_string).count();
 
     match count {
-        0 => Ok(ToolResult {
-            ok: false,
-            content: format!("no matches found for '{}' in {}", old_string, path),
-            display: format!("no matches found for '{}'", old_string),
-        }),
+        0 => Ok(ToolResult::new(
+            false,
+            format!("no matches found for '{}' in {}", old_string, path),
+            format!("no matches found for '{}'", old_string),
+        )),
         1 => {
             let new_content = content.replacen(old_string, new_string, 1);
             std::fs::write(path, &new_content).map_err(|e| CoreError::Provider(e.to_string()))?;
-            Ok(ToolResult {
-                ok: true,
-                content: format!(
+            Ok(ToolResult::new(
+                true,
+                format!(
                     "replaced 1 occurrence of '{}' with '{}' in {}",
                     old_string, new_string, path
                 ),
-                display: format!("replaced '{}' with '{}'", old_string, new_string),
-            })
+                format!("replaced '{}' with '{}'", old_string, new_string),
+            ))
         }
-        n => Ok(ToolResult {
-            ok: false,
-            content: format!(
+        n => Ok(ToolResult::new(
+            false,
+            format!(
                 "found {} matches for '{}' in {}; no changes made",
                 n, old_string, path
             ),
-            display: format!("found {} matches for '{}'; no changes made", n, old_string),
-        }),
+            format!("found {} matches for '{}'; no changes made", n, old_string),
+        )),
     }
 }
 
@@ -357,6 +429,15 @@ async fn execute_edit(
 /// Returns `Ok(true)` if the write may proceed, `Ok(false)` if it was denied.
 /// On denial, the caller should produce an ok:false result telling the model
 /// the write was denied by the user.
+/// The outcome of the write/edit approval flow.
+struct WriteDecision {
+    allowed: bool,
+    decision: Decision,
+    decided_by: DecidedBy,
+    /// The directory granted by the user, if one was recorded.
+    grant: Option<PathBuf>,
+}
+
 async fn check_write_approval(
     call_id: &str,
     path: &str,
@@ -364,19 +445,32 @@ async fn check_write_approval(
     policy: &mut Option<Policy>,
     approver: &Arc<dyn Approver>,
     _cancel: &CancellationToken,
-) -> Result<bool, CoreError> {
+) -> Result<WriteDecision, CoreError> {
     // No policy configured → no restrictions.
     let Some(policy) = policy.as_mut() else {
-        return Ok(true);
+        return Ok(WriteDecision {
+            allowed: true,
+            decision: Decision::Allow,
+            decided_by: DecidedBy::Default,
+            grant: None,
+        });
     };
 
     let (decision, grant_dir) = policy.check_write(Path::new(path));
     match decision {
-        Decision::Allow => Ok(true),
-        Decision::Deny { reason: _ } => {
+        Decision::Allow => Ok(WriteDecision {
+            allowed: true,
+            decision,
+            decided_by: DecidedBy::Default,
+            grant: None,
+        }),
+        Decision::Deny { .. } => Ok(WriteDecision {
             // Policy-level deny: no user prompt.
-            Ok(false)
-        }
+            allowed: false,
+            decision,
+            decided_by: DecidedBy::Rule("write-deny".to_string()),
+            grant: None,
+        }),
         Decision::Ask { reason } => {
             let grant_path = grant_dir.clone();
             let req = ApprovalRequest {
@@ -388,12 +482,27 @@ async fn check_write_approval(
             };
             let choice = approver.decide(&req).await;
             match choice {
-                ApprovalChoice::Deny => Ok(false),
+                ApprovalChoice::Deny => Ok(WriteDecision {
+                    allowed: false,
+                    decision: Decision::Deny {
+                        reason: "denied by user".to_string(),
+                    },
+                    decided_by: DecidedBy::User,
+                    grant: None,
+                }),
                 ApprovalChoice::Once | ApprovalChoice::AlwaysThisSession => {
+                    let mut granted = None;
                     if let Some(dir) = grant_path {
-                        let _ = policy.grant_dir(&dir);
+                        if policy.grant_dir(&dir).is_ok() {
+                            granted = Some(dir);
+                        }
                     }
-                    Ok(true)
+                    Ok(WriteDecision {
+                        allowed: true,
+                        decision: Decision::Allow,
+                        decided_by: DecidedBy::User,
+                        grant: granted,
+                    })
                 }
             }
         }
@@ -409,13 +518,20 @@ async fn execute_write_with_approval(
     approver: &Arc<dyn Approver>,
     _cancel: &CancellationToken,
 ) -> Result<ToolResult, CoreError> {
-    match check_write_approval(call_id, path, "write", policy, approver, _cancel).await? {
-        true => execute_write(path, content).await,
-        false => Ok(ToolResult {
-            ok: false,
-            content: "denied by user".to_string(),
-            display: "denied by user".to_string(),
-        }),
+    let decision = check_write_approval(call_id, path, "write", policy, approver, _cancel).await?;
+    if decision.allowed {
+        let mut result = execute_write(path, content).await?;
+        result.decision = decision.decision;
+        result.decided_by = decision.decided_by;
+        result.grant = decision.grant;
+        Ok(result)
+    } else {
+        Ok(ToolResult::new(
+            false,
+            "denied by user".to_string(),
+            "denied by user".to_string(),
+        )
+        .with_decision(decision.decision, decision.decided_by))
     }
 }
 
@@ -429,13 +545,20 @@ async fn execute_edit_with_approval(
     approver: &Arc<dyn Approver>,
     _cancel: &CancellationToken,
 ) -> Result<ToolResult, CoreError> {
-    match check_write_approval(call_id, path, "edit", policy, approver, _cancel).await? {
-        true => execute_edit(path, old_string, new_string).await,
-        false => Ok(ToolResult {
-            ok: false,
-            content: "denied by user".to_string(),
-            display: "denied by user".to_string(),
-        }),
+    let decision = check_write_approval(call_id, path, "edit", policy, approver, _cancel).await?;
+    if decision.allowed {
+        let mut result = execute_edit(path, old_string, new_string).await?;
+        result.decision = decision.decision;
+        result.decided_by = decision.decided_by;
+        result.grant = decision.grant;
+        Ok(result)
+    } else {
+        Ok(ToolResult::new(
+            false,
+            "denied by user".to_string(),
+            "denied by user".to_string(),
+        )
+        .with_decision(decision.decision, decision.decided_by))
     }
 }
 
@@ -559,22 +682,23 @@ async fn run_bash_command(
 
                     let content =
                         format!("exit_code: {exit_code}\nstdout: {stdout}\nstderr: {stderr}");
-                    Ok(ToolResult {
-                        ok: exit_code == 0,
+                    Ok(ToolResult::new(
+                        exit_code == 0,
                         content,
-                        display: format!("bash exit {exit_code}"),
-                    })
+                        format!("bash exit {exit_code}"),
+                    )
+                    .with_exit_code(Some(exit_code)))
                 }
                 Ok(Err(io_err)) => Err(CoreError::Provider(format!(
                     "failed to read command output: {io_err}"
                 ))),
                 Err(_elapsed) => {
                     kill_process_group(child_id);
-                    Ok(ToolResult {
-                        ok: false,
-                        content: format!("timed out after {timeout_secs}s"),
-                        display: format!("bash timed out after {timeout_secs}s"),
-                    })
+                    Ok(ToolResult::new(
+                        false,
+                        format!("timed out after {timeout_secs}s"),
+                        format!("bash timed out after {timeout_secs}s"),
+                    ))
                 }
             }
         }
@@ -639,7 +763,12 @@ async fn run_sandboxed_with_retry(
             policy
                 .grant_dir(&target_dir)
                 .map_err(|e| CoreError::Provider(format!("failed to grant directory: {e}")))?;
-            execute_bash_sandboxed(sandbox_spec(policy), command, timeout_secs, cancel).await
+            let mut result =
+                execute_bash_sandboxed(sandbox_spec(policy), command, timeout_secs, cancel).await?;
+            result.decision = Decision::Allow;
+            result.decided_by = DecidedBy::User;
+            result.grant = Some(target_dir);
+            Ok(result)
         }
     }
 }

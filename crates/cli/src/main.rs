@@ -13,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use barry_core::config::Config;
+use barry_core::session::{self, SessionLog};
 use barry_core::{Agent, Approver, BoxFuture};
 use barry_llm::{Compat, OpenAiProvider};
 use barry_policy::Policy;
@@ -37,6 +38,9 @@ struct Cli {
     /// Model id sent to the provider
     #[arg(long = "model")]
     model: Option<String>,
+    /// Resume a session from a log file or a UUID/timestamp prefix
+    #[arg(long = "resume")]
+    resume: Option<String>,
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -48,6 +52,11 @@ enum Commands {
         #[command(subcommand)]
         command: Option<RulesCommands>,
     },
+    /// Inspect session logs
+    Log {
+        #[command(subcommand)]
+        command: LogCommands,
+    },
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -56,6 +65,15 @@ enum RulesCommands {
     Check {
         /// The command to check
         command: String,
+    },
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum LogCommands {
+    /// Verify the hash chain of a session log
+    Verify {
+        /// Path to the session log file
+        file: PathBuf,
     },
 }
 
@@ -97,11 +115,29 @@ async fn main() -> ExitCode {
         return ExitCode::from(2);
     };
 
-    run_headless(cfg, prompt, cli.json, cli.model).await
+    run_headless(cfg, prompt, cli.json, cli.model, cli.resume).await
 }
 
 fn run_command(command: Commands) -> ExitCode {
     match command {
+        Commands::Log { command } => match command {
+            LogCommands::Verify { file } => match session::verify(&file) {
+                Ok(report) => match report.broken_at {
+                    None => {
+                        println!("ok ({} entries)", report.entries);
+                        ExitCode::SUCCESS
+                    }
+                    Some(line) => {
+                        println!("broken at line {line}");
+                        ExitCode::from(1)
+                    }
+                },
+                Err(err) => {
+                    eprintln!("{err}");
+                    ExitCode::from(1)
+                }
+            },
+        },
         Commands::Rules { command } => match command {
             Some(RulesCommands::Check { command }) => {
                 let cfg = barry_policy::PolicyConfig {
@@ -150,7 +186,13 @@ fn run_command(command: Commands) -> ExitCode {
     }
 }
 
-async fn run_headless(cfg: Config, prompt: String, json: bool, model: Option<String>) -> ExitCode {
+async fn run_headless(
+    cfg: Config,
+    prompt: String,
+    json: bool,
+    model: Option<String>,
+    resume: Option<String>,
+) -> ExitCode {
     let model = model.unwrap_or_else(|| cfg.default_model.clone());
 
     // Temporary provider wiring until PLAN 6.8 model profiles (M6): the base
@@ -189,11 +231,42 @@ async fn run_headless(cfg: Config, prompt: String, json: bool, model: Option<Str
     })
     .expect("policy constructs");
 
-    let mut agent = match Agent::new(cfg, provider, Arc::new(HeadlessApprover), Some(policy)) {
-        Ok(agent) => agent,
-        Err(err) => {
-            eprintln!("{err}");
-            return ExitCode::from(1);
+    let mut agent = match resume {
+        Some(spec) => {
+            let Some(path) = session::resolve_session(&spec) else {
+                eprintln!("error: no session log matches {spec:?}");
+                return ExitCode::from(2);
+            };
+            match Agent::resume(
+                cfg,
+                provider,
+                Arc::new(HeadlessApprover),
+                Some(policy),
+                &path,
+            ) {
+                Ok(agent) => agent,
+                Err(err) => {
+                    eprintln!("{err}");
+                    return ExitCode::from(1);
+                }
+            }
+        }
+        None => {
+            let mut agent =
+                match Agent::new(cfg, provider, Arc::new(HeadlessApprover), Some(policy)) {
+                    Ok(agent) => agent,
+                    Err(err) => {
+                        eprintln!("{err}");
+                        return ExitCode::from(1);
+                    }
+                };
+            // PLAN 6.7: every session is audited. A read-only state directory
+            // must not make barry unusable, so a failure only warns.
+            match SessionLog::create_default("main") {
+                Ok(log) => agent = agent.with_session_log(log),
+                Err(err) => eprintln!("warning: session log disabled: {err}"),
+            }
+            agent
         }
     };
 
