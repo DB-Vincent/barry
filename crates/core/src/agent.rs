@@ -362,6 +362,20 @@ impl Agent {
     pub fn session_path(&self) -> Option<&Path> {
         self.session.as_ref().map(SessionLog::path)
     }
+
+    /// Directories granted this session (PLAN 6.9 `/grants`).
+    pub fn grants(&self) -> Vec<std::path::PathBuf> {
+        self.policy
+            .as_ref()
+            .map(|policy| policy.grants().to_vec())
+            .unwrap_or_default()
+    }
+
+    /// Replace the provider after `/model` changes the model id. History and
+    /// the system prompt stay as they are.
+    pub fn set_provider(&mut self, provider: Arc<dyn Provider>) {
+        self.provider = provider;
+    }
 }
 
 fn session_error(err: SessionError) -> CoreError {

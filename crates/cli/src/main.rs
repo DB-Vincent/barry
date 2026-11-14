@@ -1,4 +1,4 @@
-//! The `barry` binary: entry point, headless mode and (later) the REPL.
+//! The `barry` binary: entry point, headless mode and the REPL.
 
 #![forbid(unsafe_code)]
 
@@ -17,12 +17,37 @@ use url::Url;
 use barry_core::config::Config;
 use barry_core::session::{self, SessionLog};
 use barry_core::{Agent, Approver, BoxFuture};
-use barry_llm::{Compat, OpenAiProvider};
+use barry_llm::{Compat, OpenAiProvider, Provider};
 use barry_policy::Policy;
 use barry_protocol::{ApprovalChoice, ApprovalRequest, Event, StopReason};
 
 /// Default endpoint until PLAN 6.8 (named model profiles) lands in M6.
 const DEFAULT_BASE_URL: &str = "http://localhost:11434/v1";
+
+mod render;
+mod repl;
+
+/// Read `BARRY_BASE_URL`, falling back to the local default.
+pub(crate) fn parse_base_url() -> Result<Url, String> {
+    let raw_base_url =
+        std::env::var("BARRY_BASE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.to_string());
+    Url::parse(&raw_base_url)
+        .map_err(|err| format!("config error: invalid BARRY_BASE_URL {raw_base_url:?}: {err}"))
+}
+
+/// Build the provider used by both headless mode and the REPL.
+pub(crate) fn build_provider(model: String, base_url: &Url) -> Arc<dyn Provider> {
+    Arc::new(OpenAiProvider::new(
+        model,
+        base_url.clone(),
+        None,
+        8192,
+        Compat {
+            reasoning_field: Some("reasoning_content".into()),
+            ..Compat::default()
+        },
+    ))
+}
 
 #[derive(Parser, Debug)]
 #[command(
@@ -113,8 +138,7 @@ async fn main() -> ExitCode {
     }
 
     let Some(prompt) = cli.prompt else {
-        eprintln!("error: interactive mode is not available yet; use -p \"<prompt>\"");
-        return ExitCode::from(2);
+        return repl::run(cfg, cli.model, cli.resume).await;
     };
 
     run_headless(cfg, prompt, cli.json, cli.model, cli.resume).await
@@ -201,26 +225,15 @@ async fn run_headless(
 
     // Temporary provider wiring until PLAN 6.8 model profiles (M6): the base
     // URL comes from the environment, with a local-server default.
-    let raw_base_url =
-        std::env::var("BARRY_BASE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.to_string());
-    let base_url = match Url::parse(&raw_base_url) {
+    let base_url = match parse_base_url() {
         Ok(url) => url,
         Err(err) => {
-            eprintln!("config error: invalid BARRY_BASE_URL {raw_base_url:?}: {err}");
+            eprintln!("{err}");
             return ExitCode::from(2);
         }
     };
 
-    let provider = Arc::new(OpenAiProvider::new(
-        model,
-        base_url,
-        None,
-        8192,
-        Compat {
-            reasoning_field: Some("reasoning_content".into()),
-            ..Compat::default()
-        },
-    ));
+    let provider = build_provider(model, &base_url);
 
     // Build the sandbox policy from config. Headless mode never trusts
     // project config, so only defaults + config file values apply.
@@ -283,6 +296,7 @@ async fn run_headless(
 
     let mut turn_limited = false;
     let mut wrote_text = false;
+    let mut thinking = render::Thinking::default();
     while let Some(event) = rx.next().await {
         if matches!(&event, Event::Notice(msg) if msg == "turn limit reached") {
             turn_limited = true;
@@ -297,15 +311,16 @@ async fn run_headless(
                 }
             }
         } else if let Event::TextDelta(text) = &event {
+            thinking.finish();
             print!("{text}");
             let _ = std::io::stdout().flush();
             wrote_text = true;
         } else if let Event::ReasoningDelta(text) = &event {
-            eprint!("thinking: {text}");
-            let _ = std::io::stderr().flush();
+            thinking.delta(text);
         }
     }
 
+    thinking.finish();
     if wrote_text {
         println!();
     }
