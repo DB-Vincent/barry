@@ -9,6 +9,7 @@ fn config() -> PolicyConfig {
         read_deny: vec![],
         protected: vec![],
         rules: vec![],
+        network: true,
     }
 }
 

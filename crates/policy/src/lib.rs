@@ -6,7 +6,7 @@
 
 mod path;
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use thiserror::Error;
 
 pub use barry_protocol::Decision;
@@ -29,6 +29,8 @@ pub struct PolicyConfig {
     pub read_deny: Vec<String>,
     pub protected: Vec<String>,
     pub rules: Vec<BashRule>,
+    /// Whether sandboxed bash commands may access the network.
+    pub network: bool,
 }
 
 /// A bash rule: a `match` string against a command, with a decision.
@@ -49,6 +51,7 @@ pub struct Policy {
     grants: Vec<PathBuf>,
     bash_grants: Vec<String>,
     rules: Vec<BashRule>,
+    network: bool,
 }
 
 impl Policy {
@@ -83,6 +86,7 @@ impl Policy {
             grants: Vec::new(),
             bash_grants: Vec::new(),
             rules: cfg.rules,
+            network: cfg.network,
         })
     }
 
@@ -126,6 +130,14 @@ impl Policy {
             }
         };
 
+        // Explicit grants always win: a grant to a protected directory
+        // (e.g. `.git`) is exactly what BC-4.5 asks for.
+        for grant in &self.grants {
+            if is_under(&canonical, grant) {
+                return (Decision::Allow, None);
+            }
+        }
+
         // Protected path components (e.g. `.git`, `.env`) always ask.
         // Check every component, not just the final one (PLAN 6.1.1).
         for component in canonical.components() {
@@ -162,10 +174,29 @@ impl Policy {
     pub fn grant_dir(&mut self, dir: &Path) -> Result<(), PolicyError> {
         let canonical = match canonicalise(&self.cwd, dir) {
             Ok(c) => c,
+            Err(PathError::DotDot { .. }) => {
+                // `..` components are rejected by canonicalise (PLAN 6.1.1),
+                // but grant_dir is user-initiated explicit permission, so
+                // resolve `..` manually by walking up from cwd.
+                let mut current = self.cwd.clone();
+                for component in dir.components() {
+                    match component {
+                        Component::ParentDir => {
+                            current.pop();
+                        }
+                        Component::Normal(c) => {
+                            current.push(c);
+                        }
+                        _ => {}
+                    }
+                }
+                current
+            }
             Err(_) => return Err(PolicyError::InvalidPath(dir.to_path_buf())),
         };
-        self.grants.push(canonical.clone());
-        self.writable_roots.push(canonical);
+        // Create the directory if it doesn't exist so bwrap can bind-mount it.
+        let _ = std::fs::create_dir_all(&canonical);
+        self.grants.push(canonical);
         Ok(())
     }
 
@@ -173,6 +204,37 @@ impl Policy {
     /// Commands starting with this prefix are allowed without asking.
     pub fn approve_prefix(&mut self, prefix: &str) {
         self.bash_grants.push(prefix.to_string());
+    }
+
+    /// Session working directory.
+    pub fn cwd(&self) -> &Path {
+        &self.cwd
+    }
+
+    /// Writable roots (cwd + extra writable dirs). Grants are separate so the
+    /// sandbox can mount them after protected paths.
+    pub fn writable_roots(&self) -> &[PathBuf] {
+        &self.writable_roots
+    }
+
+    /// Explicit directory grants, mounted read-write after protected paths.
+    pub fn grants(&self) -> &[PathBuf] {
+        &self.grants
+    }
+
+    /// Read-deny paths (canonicalised).
+    pub fn read_deny_paths(&self) -> &[PathBuf] {
+        &self.read_deny
+    }
+
+    /// Protected path components (e.g. ".git").
+    pub fn protected(&self) -> &[String] {
+        &self.protected
+    }
+
+    /// Whether sandboxed bash commands may access the network.
+    pub fn network(&self) -> bool {
+        self.network
     }
 
     /// Check a bash command against the rule table. Deny > ask > allow.
@@ -246,6 +308,7 @@ impl Policy {
             "wc",
             "pwd",
             "echo",
+            "env",
             "which",
             "file",
             "stat",
@@ -258,6 +321,7 @@ impl Policy {
             "uniq",
             "cut",
             "diff",
+            "tee",
             "git status",
             "git diff",
             "git log",

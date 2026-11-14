@@ -83,6 +83,7 @@ async fn bc_3_9_bash_always_this_session_persists_in_session() {
         read_deny: vec![],
         protected: vec![],
         rules: vec![],
+        network: true,
     })
     .expect("policy constructs");
 
@@ -102,7 +103,9 @@ async fn bc_3_9_bash_always_this_session_persists_in_session() {
         Config {
             default_model: "test".to_string(),
             max_turns: 10,
-            dev_unsafe_bash: true,
+            sandbox_network: true,
+            fs_read_deny: vec![],
+            fs_protected: vec![],
         },
         provider.clone(),
         approver.clone(),
@@ -157,6 +160,7 @@ async fn bc_3_9_bash_always_this_session_persists_in_session() {
         read_deny: vec![],
         protected: vec![],
         rules: vec![],
+        network: true,
     })
     .expect("policy constructs");
 
@@ -172,7 +176,9 @@ async fn bc_3_9_bash_always_this_session_persists_in_session() {
         Config {
             default_model: "test".to_string(),
             max_turns: 10,
-            dev_unsafe_bash: true,
+            sandbox_network: true,
+            fs_read_deny: vec![],
+            fs_protected: vec![],
         },
         provider2.clone(),
         approver2,

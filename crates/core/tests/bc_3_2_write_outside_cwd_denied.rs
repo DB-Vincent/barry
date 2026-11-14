@@ -85,6 +85,7 @@ async fn bc_3_2_write_outside_cwd_denied_by_user() {
         read_deny: vec![],
         protected: vec![],
         rules: vec![],
+        network: true,
     })
     .expect("policy constructs");
 
@@ -102,7 +103,9 @@ async fn bc_3_2_write_outside_cwd_denied_by_user() {
         Config {
             default_model: "test".to_string(),
             max_turns: 10,
-            dev_unsafe_bash: false,
+            sandbox_network: true,
+            fs_read_deny: vec![],
+            fs_protected: vec![],
         },
         provider.clone(),
         approver_clone,

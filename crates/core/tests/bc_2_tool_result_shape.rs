@@ -93,11 +93,7 @@ async fn collect_events(mut rx: mpsc::Receiver<Event>) -> Vec<Event> {
 }
 
 /// Runs one tool call and returns the content the model was handed.
-async fn tool_result_content(
-    dev_unsafe_bash: bool,
-    name: &str,
-    arguments: serde_json::Value,
-) -> String {
+async fn tool_result_content(name: &str, arguments: serde_json::Value) -> String {
     let provider = Arc::new(RecordingProvider::new(vec![
         done_tool_call(name, arguments),
         LlmEvent::TextDelta("done".to_string()),
@@ -107,7 +103,9 @@ async fn tool_result_content(
         Config {
             default_model: "test".to_string(),
             max_turns: 10,
-            dev_unsafe_bash,
+            sandbox_network: true,
+            fs_read_deny: vec![],
+            fs_protected: vec![],
         },
         provider.clone(),
         Arc::new(LocalApprover),
@@ -139,8 +137,7 @@ async fn read_result_is_wrapped_in_tool_output() {
     let path = dir.path().join("a.txt");
     std::fs::write(&path, "alpha").expect("write");
 
-    let content =
-        tool_result_content(false, "read", json!({ "path": path.to_str().unwrap() })).await;
+    let content = tool_result_content("read", json!({ "path": path.to_str().unwrap() })).await;
 
     assert_eq!(
         content,
@@ -151,7 +148,6 @@ async fn read_result_is_wrapped_in_tool_output() {
 #[tokio::test]
 async fn bash_result_carries_exit_code_stdout_and_stderr() {
     let content = tool_result_content(
-        true,
         "bash",
         json!({ "command": "echo out; echo err >&2; exit 3" }),
     )
@@ -169,7 +165,7 @@ async fn bash_result_carries_exit_code_stdout_and_stderr() {
 
 #[tokio::test]
 async fn successful_bash_result_also_carries_all_three() {
-    let content = tool_result_content(true, "bash", json!({ "command": "echo hi" })).await;
+    let content = tool_result_content("bash", json!({ "command": "echo hi" })).await;
 
     assert!(
         content.starts_with("<tool_output tool=\"bash\" ok=\"true\">"),

@@ -130,6 +130,7 @@ dependencies = [
  "barry-llm",
  "barry-policy",
  "barry-protocol",
+ "barry-sandbox",
  "barry-testkit",
  "clap",
  "futures",
@@ -197,7 +198,10 @@ dependencies = [
 name = "barry-sandbox"
 version = "0.1.0"
 dependencies = [
- "barry-protocol",
+ "libc",
+ "seccompiler",
+ "thiserror",
+ "tokio",
 ]
 
 [[package]]
@@ -1459,6 +1463,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9cb23c424d8ee841bb4d813677ca237e2a610067d594fec130f87d6093495ab5"
 dependencies = [
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "seccompiler"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4ae55de56877481d112a559bbc12667635fdaf5e005712fd4e2b2fa50ffc884"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

@@ -24,11 +24,14 @@ pub enum ConfigError {
 pub struct Config {
     pub default_model: String,
     pub max_turns: u64,
-    /// Allows the `bash` tool to run without a sandbox. Set only from the
-    /// hidden `--dev-unsafe-bash` CLI flag, never from the config file: a file
-    /// on disk must not be able to turn off a safety property. Removed in M4,
-    /// when bash runs inside the sandbox unconditionally.
-    pub dev_unsafe_bash: bool,
+    /// Sandbox: whether bash commands may access the network.
+    pub sandbox_network: bool,
+    /// Filesystem: paths whose contents must never be read (expanded `~`,
+    /// canonicalised where they exist).
+    pub fs_read_deny: Vec<String>,
+    /// Filesystem: path components that always require approval (e.g. `.git`,
+    /// `.barry`, `.env`).
+    pub fs_protected: Vec<String>,
 }
 
 impl Default for Config {
@@ -36,7 +39,9 @@ impl Default for Config {
         Self {
             default_model: "local".to_string(),
             max_turns: 50,
-            dev_unsafe_bash: false,
+            sandbox_network: true,
+            fs_read_deny: vec![],
+            fs_protected: vec![],
         }
     }
 }
@@ -60,11 +65,46 @@ impl Config {
             source,
         })?;
 
-        let _value: toml::Value = content.parse().map_err(|source| ConfigError::Toml {
+        let value: toml::Value = toml::from_str(&content).map_err(|source| ConfigError::Toml {
             path: path.display().to_string(),
             source,
         })?;
 
-        Ok(Some(Config::default()))
+        // Extract sandbox/fs sections.
+        let sandbox_network = value
+            .get("sandbox")
+            .and_then(|s| s.get("network"))
+            .and_then(|n| n.as_bool())
+            .unwrap_or(true);
+
+        let fs_read_deny: Vec<String> = value
+            .get("fs")
+            .and_then(|f| f.get("read_deny"))
+            .and_then(|r| r.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let fs_protected: Vec<String> = value
+            .get("fs")
+            .and_then(|f| f.get("protected"))
+            .and_then(|r| r.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Ok(Some(Self {
+            default_model: "local".to_string(),
+            max_turns: 50,
+            sandbox_network,
+            fs_read_deny,
+            fs_protected,
+        }))
     }
 }

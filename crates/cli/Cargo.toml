@@ -9,6 +9,7 @@ barry-protocol = { workspace = true }
 barry-policy = { workspace = true }
 barry-core = { workspace = true }
 barry-llm = { workspace = true }
+barry-sandbox = { workspace = true }
 futures = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

@@ -116,7 +116,9 @@ async fn bc_2_7_three_results_in_call_order_when_one_fails() {
         Config {
             default_model: "test".to_string(),
             max_turns: 10,
-            dev_unsafe_bash: false,
+            sandbox_network: true,
+            fs_read_deny: vec![],
+            fs_protected: vec![],
         },
         provider.clone(),
         Arc::new(LocalApprover),

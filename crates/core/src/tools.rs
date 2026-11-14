@@ -1,12 +1,13 @@
 //! Tool specs advertised to the model, and the executors behind them.
 
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
 use barry_policy::Policy;
 use barry_protocol::{ApprovalChoice, ApprovalRequest, Decision, ToolCall, ToolSpec};
+use barry_sandbox::{self as sandbox, SandboxSpec};
 use serde_json::json;
-use std::path::Path;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
@@ -122,7 +123,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
 
 pub(crate) async fn execute_tool(
     call: &ToolCall,
-    cfg: &Config,
+    _cfg: &Config,
     policy: &mut Option<Policy>,
     approver: &Arc<dyn Approver>,
     cancel: &CancellationToken,
@@ -171,16 +172,6 @@ pub(crate) async fn execute_tool(
             .await
         }
         "bash" => {
-            // Unsandboxed bash is a development-only capability (PLAN line 617).
-            // Refuse rather than omit the tool: the model should learn why the
-            // call did not run instead of silently not having the tool.
-            if !cfg.dev_unsafe_bash {
-                return Ok(ToolResult {
-                    ok: false,
-                    content: "bash is disabled: rerun barry with --dev-unsafe-bash".to_string(),
-                    display: "bash disabled (needs --dev-unsafe-bash)".to_string(),
-                });
-            }
             let command = call
                 .arguments
                 .get("command")
@@ -197,11 +188,12 @@ pub(crate) async fn execute_tool(
 
             // Policy check: deny > grant > ask > allow.
             let Some(policy) = policy.as_mut() else {
-                return execute_bash(command, timeout_secs, cancel).await;
+                // No policy → run unsandboxed (backstop for headless/cli
+                // without policy).
+                return execute_bash_none(command, timeout_secs, cancel).await;
             };
             let (decision, _rule_id) = policy.check_bash(command);
             match decision {
-                Decision::Allow => execute_bash(command, timeout_secs, cancel).await,
                 Decision::Deny { reason } => Ok(ToolResult {
                     ok: false,
                     content: format!("bash denied: {reason}"),
@@ -215,8 +207,7 @@ pub(crate) async fn execute_tool(
                         reason,
                         grant_path: None,
                     };
-                    let choice = approver.decide(&req).await;
-                    match choice {
+                    match approver.decide(&req).await {
                         ApprovalChoice::Deny => Ok(ToolResult {
                             ok: false,
                             content: "denied by user".to_string(),
@@ -227,9 +218,28 @@ pub(crate) async fn execute_tool(
                             if let Some(first_word) = command.split_whitespace().next() {
                                 policy.approve_prefix(first_word);
                             }
-                            execute_bash(command, timeout_secs, cancel).await
+                            run_sandboxed_with_retry(
+                                policy,
+                                command,
+                                timeout_secs,
+                                cancel,
+                                approver,
+                                call.id.clone(),
+                            )
+                            .await
                         }
                     }
+                }
+                Decision::Allow => {
+                    run_sandboxed_with_retry(
+                        policy,
+                        command,
+                        timeout_secs,
+                        cancel,
+                        approver,
+                        call.id.clone(),
+                    )
+                    .await
                 }
             }
         }
@@ -438,25 +448,98 @@ fn kill_process_group(pid: u32) {
         .output();
 }
 
-async fn execute_bash(
+/// Returns `true` if a tool result indicates the sandbox blocked the command.
+/// The command failed (ok:false, exit_code != 0) and stderr contains a
+/// sandbox denial message ("Operation not permitted", "Read-only file system",
+/// "Permission denied", or "No such file or directory" when writing outside
+/// the writable roots).
+fn sandbox_denied(result: &ToolResult) -> bool {
+    !result.ok
+        && result.content.contains("exit_code:")
+        && !result.content.starts_with("exit_code: 0")
+        && (result.content.contains("Operation not permitted")
+            || result.content.contains("Read-only file system")
+            || result.content.contains("Permission denied")
+            || result.content.contains("No such file or directory"))
+}
+
+/// Extracts the directory path that the sandbox denied access to.
+/// Looks for a shell redirect target (`>`, `>>`, `2>`) in the command and
+/// returns its parent directory, e.g. `echo x > ../outside/f` → `../outside`.
+fn sandbox_denied_dir(_result: &ToolResult, command: &str) -> Option<std::path::PathBuf> {
+    let parts: Vec<&str> = command.split_whitespace().collect();
+    for (i, raw) in parts.iter().enumerate() {
+        let part = *raw;
+        let target = if let Some(rest) = part.strip_prefix(">>") {
+            if rest.is_empty() {
+                parts.get(i + 1).copied()
+            } else {
+                Some(rest)
+            }
+        } else if let Some(rest) = part.strip_prefix("2>") {
+            if rest.is_empty() {
+                parts.get(i + 1).copied()
+            } else {
+                Some(rest)
+            }
+        } else if let Some(rest) = part.strip_prefix('>') {
+            if rest.is_empty() {
+                parts.get(i + 1).copied()
+            } else {
+                Some(rest)
+            }
+        } else {
+            None
+        };
+
+        if let Some(target) = target {
+            let path = std::path::Path::new(target);
+            return path.parent().map(|p| p.to_path_buf());
+        }
+    }
+    None
+}
+
+/// Run bash directly (no sandbox). Used when no policy is configured.
+async fn execute_bash_none(
     command: &str,
     timeout_secs: u64,
     cancel: &CancellationToken,
 ) -> Result<ToolResult, CoreError> {
-    let child = tokio::process::Command::new("/bin/sh")
-        .arg("-c")
-        .arg(command)
-        .process_group(0)
-        .stdout(std::process::Stdio::piped())
+    let mut cmd = tokio::process::Command::new("/bin/sh");
+    cmd.arg("-c").arg(command);
+    run_bash_command(cmd, timeout_secs, cancel).await
+}
+
+/// Run bash inside the OS sandbox.
+async fn execute_bash_sandboxed(
+    spec: SandboxSpec,
+    command: &str,
+    timeout_secs: u64,
+    cancel: &CancellationToken,
+) -> Result<ToolResult, CoreError> {
+    let cmd = sandbox::command(&spec, command)
+        .map_err(|e| CoreError::Provider(format!("sandbox error: {e}")))?;
+    run_bash_command(cmd, timeout_secs, cancel).await
+}
+
+/// Common execution logic: spawn, race cancel vs timeout vs completion.
+async fn run_bash_command(
+    cmd: tokio::process::Command,
+    timeout_secs: u64,
+    cancel: &CancellationToken,
+) -> Result<ToolResult, CoreError> {
+    let mut cmd = cmd;
+    cmd.stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
+        .process_group(0);
+
+    let child = cmd
         .spawn()
-        .map_err(|e| CoreError::Provider(format!("failed to run /bin/sh: {e}")))?;
+        .map_err(|e| CoreError::Provider(format!("failed to run command: {e}")))?;
 
     let child_id = child.id().unwrap_or(0);
 
-    // `wait_with_output` consumes the child, so it moves into the racing future.
-    // Once that future is dropped (cancel arm) the only handle left is the pid,
-    // which is why the group is killed by pid rather than via `child.kill()`.
     let wait = async move { child.wait_with_output().await };
 
     tokio::select! {
@@ -469,15 +552,11 @@ async fn execute_bash(
             match result {
                 Ok(Ok(output)) => {
                     let exit_code = output.status.code().unwrap_or(-1);
-                    // Bind the Cow temporaries: `truncate` borrows from them, so they
-                    // must outlive the returned Cow.
                     let stdout_raw = String::from_utf8_lossy(&output.stdout);
                     let stderr_raw = String::from_utf8_lossy(&output.stderr);
                     let stdout = truncate(&stdout_raw, 30_000);
                     let stderr = truncate(&stderr_raw, 30_000);
 
-                    // PLAN 5.1: exit_code, stdout and stderr on both paths,
-                    // each stream truncated on its own.
                     let content =
                         format!("exit_code: {exit_code}\nstdout: {stdout}\nstderr: {stderr}");
                     Ok(ToolResult {
@@ -487,7 +566,7 @@ async fn execute_bash(
                     })
                 }
                 Ok(Err(io_err)) => Err(CoreError::Provider(format!(
-                    "failed to read bash output: {io_err}"
+                    "failed to read command output: {io_err}"
                 ))),
                 Err(_elapsed) => {
                     kill_process_group(child_id);
@@ -498,6 +577,69 @@ async fn execute_bash(
                     })
                 }
             }
+        }
+    }
+}
+
+/// Build the sandbox spec from the current policy. Rebuilt after a grant so
+/// the retry sees the newly granted directory.
+fn sandbox_spec(policy: &Policy) -> SandboxSpec {
+    SandboxSpec {
+        cwd: policy.cwd().to_path_buf(),
+        writable_roots: policy.writable_roots().to_vec(),
+        grants: policy.grants().to_vec(),
+        read_deny: policy.read_deny_paths().to_vec(),
+        protected_ro: policy
+            .protected()
+            .iter()
+            .map(|p| policy.cwd().join(p))
+            .filter(|p| p.exists())
+            .collect(),
+        network: policy.network(),
+    }
+}
+
+/// Run bash inside the OS sandbox with denial-retry support.
+///
+/// If the sandbox blocks the command (exit_code != 0, stderr contains a
+/// sandbox denial message), offer the user a directory grant and retry once
+/// (PLAN 6.2, BC-4.2). If the user denies the grant, the original sandbox
+/// failure goes to the model unchanged.
+async fn run_sandboxed_with_retry(
+    policy: &mut Policy,
+    command: &str,
+    timeout_secs: u64,
+    cancel: &CancellationToken,
+    approver: &Arc<dyn Approver>,
+    call_id: String,
+) -> Result<ToolResult, CoreError> {
+    let first = execute_bash_sandboxed(sandbox_spec(policy), command, timeout_secs, cancel).await?;
+    if !sandbox_denied(&first) {
+        return Ok(first);
+    }
+
+    // Only offer a grant when we can name the directory the sandbox refused.
+    let Some(target_dir) = sandbox_denied_dir(&first, command) else {
+        return Ok(first);
+    };
+
+    let req = ApprovalRequest {
+        id: call_id,
+        tool: "bash".to_string(),
+        summary: format!("bash: {command}"),
+        reason: "sandbox blocked the command".to_string(),
+        grant_path: Some(target_dir.clone()),
+    };
+
+    match approver.decide(&req).await {
+        // Denial: the model sees the original sandbox failure, not a generic
+        // "denied by user", so it can reason about the actual block.
+        ApprovalChoice::Deny => Ok(first),
+        ApprovalChoice::Once | ApprovalChoice::AlwaysThisSession => {
+            policy
+                .grant_dir(&target_dir)
+                .map_err(|e| CoreError::Provider(format!("failed to grant directory: {e}")))?;
+            execute_bash_sandboxed(sandbox_spec(policy), command, timeout_secs, cancel).await
         }
     }
 }
