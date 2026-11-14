@@ -98,6 +98,10 @@ pub(crate) fn command(
     cmd.arg("-p").arg(&profile);
     cmd.arg("--").arg("/bin/sh").arg("-c").arg(shell_command);
 
+    // Run in the session cwd. bwrap does this with --chdir on Linux; on macOS
+    // sandbox-exec inherits the parent's cwd, so set it explicitly.
+    cmd.current_dir(&spec.cwd);
+
     // Strip the inherited environment, keeping only the same minimal allowlist
     // as the Linux sandbox (BC-4.4).
     cmd.env_clear();
