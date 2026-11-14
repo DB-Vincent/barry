@@ -1,5 +1,7 @@
 //! Core agent loop for barry.
 
+#![forbid(unsafe_code)]
+
 use std::future::Future;
 use std::pin::Pin;
 
@@ -9,6 +11,8 @@ pub mod agent;
 pub mod config;
 pub mod context;
 pub mod prompt;
+pub mod redact;
+pub mod session;
 pub mod tools;
 
 pub use agent::Agent;
@@ -25,6 +29,8 @@ pub enum CoreError {
     Provider(String),
     #[error("not implemented: {0}")]
     NotImplemented(String),
+    #[error("session error: {0}")]
+    Session(String),
     #[error("event channel closed")]
     ChannelClosed,
 }

@@ -24,6 +24,9 @@ url = { version = "=2.5.8" }
 tokio-util = { version = "=0.7.20" }
 reqwest = { version = "=0.13.5", default-features = false, features = ["rustls", "stream", "json"] }
 time = { version = "=0.3.55", features = ["formatting"] }
+sha2 = { version = "=0.11.1" }
+regex = { version = "=1.13.1" }
+uuid = { version = "=1.29.2", features = ["v4"] }
 libc = { version = "=0.2.191" }
 seccompiler = { version = "=0.5.0" }
 barry-protocol = { path = "crates/protocol" }
