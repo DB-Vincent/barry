@@ -1,6 +1,8 @@
-/// BC-4.7 On Linux with no `bwrap` on `PATH`, bash returns a clear
-/// "bubblewrap not found" error, and the command does not run at all (a marker
-/// file is not created).
+//! BC-4.7 On Linux with no `bwrap` on `PATH`, bash returns a clear
+//! "bubblewrap not found" error, and the command does not run at all (a marker
+//! file is not created).
+#![cfg(target_os = "linux")]
+
 use barry_testkit::{FakeLlm, Reply};
 use serde_json::json;
 

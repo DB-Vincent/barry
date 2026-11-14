@@ -198,7 +198,6 @@ dependencies = [
 name = "barry-sandbox"
 version = "0.1.0"
 dependencies = [
- "barry-protocol",
  "libc",
  "seccompiler",
  "thiserror",

@@ -45,6 +45,18 @@ pub(crate) fn command(
         }
     }
 
+    // Explicit grants are allowed *after* the protected denies so a grant
+    // overrides protection for exactly the directory the user approved
+    // (BC-4.5). The last matching rule wins in Seatbelt.
+    for (i, g) in spec.grants.iter().enumerate() {
+        if g.exists() {
+            profile.push_str(&format!(
+                "(allow file-write* (subpath (param \"GRANT_{}\")))\n",
+                i
+            ));
+        }
+    }
+
     // Read-deny paths.
     for (i, p) in spec.read_deny.iter().enumerate() {
         if p.exists() {
@@ -71,6 +83,11 @@ pub(crate) fn command(
                 .arg(format!("PROTECTED_{}={}", i, p.display()));
         }
     }
+    for (i, g) in spec.grants.iter().enumerate() {
+        if g.exists() {
+            cmd.arg("-D").arg(format!("GRANT_{}={}", i, g.display()));
+        }
+    }
     for (i, p) in spec.read_deny.iter().enumerate() {
         if p.exists() {
             cmd.arg("-D")
@@ -80,6 +97,13 @@ pub(crate) fn command(
 
     cmd.arg("-p").arg(&profile);
     cmd.arg("--").arg("/bin/sh").arg("-c").arg(shell_command);
+
+    // Strip the inherited environment, keeping only the same minimal allowlist
+    // as the Linux sandbox (BC-4.4).
+    cmd.env_clear();
+    for (key, value) in crate::sandbox_env() {
+        cmd.env(key, value);
+    }
 
     cmd.process_group(0);
 

@@ -4,8 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-barry-protocol = { workspace = true }
-libc = { workspace = true }
-seccompiler = { workspace = true }
 tokio = { workspace = true, features = ["process"] }
 thiserror = { workspace = true }
+
+# seccomp and the syscall constants it needs are Linux-only. Keeping them out
+# of the unconditional dependency list lets the crate build on macOS.
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { workspace = true }
+seccompiler = { workspace = true }

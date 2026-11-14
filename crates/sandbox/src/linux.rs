@@ -110,11 +110,12 @@ pub(crate) fn command(
 
 /// Locate the barry executable to re-exec as the sandbox helper.
 ///
-/// In a normal run this is the running binary. Integration tests run as
-/// `target/<profile>/deps/<test>`, so fall back to the sibling
-/// `target/<profile>/barry`. `BARRY_BIN_OVERRIDE` is an explicit escape hatch
-/// (tests, unusual installs). Fails closed rather than running a non-barry
-/// binary as the helper.
+/// In a normal run this is the running binary. Test binaries are launched from
+/// `target/<profile>/deps/<test>` or, depending on the cargo layout,
+/// `target/<profile>/build/<crate>/<hash>/out/<test>`, so walk up the
+/// ancestors and take the first `barry` executable found next to one of them.
+/// `BARRY_BIN_OVERRIDE` is an explicit escape hatch (tests, unusual installs).
+/// Fails closed rather than running a non-barry binary as the helper.
 fn helper_exe() -> Result<PathBuf, SandboxError> {
     if let Ok(path) = std::env::var("BARRY_BIN_OVERRIDE") {
         if !path.is_empty() {
@@ -128,11 +129,8 @@ fn helper_exe() -> Result<PathBuf, SandboxError> {
         return Ok(exe);
     }
 
-    if let Some(candidate) = exe
-        .parent()
-        .and_then(|deps| deps.parent())
-        .map(|p| p.join("barry"))
-    {
+    for ancestor in exe.ancestors().skip(1) {
+        let candidate = ancestor.join("barry");
         if candidate.is_file() {
             return Ok(candidate);
         }
@@ -149,25 +147,16 @@ fn helper_exe() -> Result<PathBuf, SandboxError> {
 /// clears the environment and sets only PATH, HOME, USER, LANG, LC_ALL, TERM,
 /// TMPDIR before executing the user's command.
 fn build_sandbox_env(shell_command: &str) -> String {
-    let path_var = std::env::var("PATH").unwrap_or_default();
-    let home_var = std::env::var("HOME").unwrap_or_default();
-    let user_var = std::env::var("USER").unwrap_or_else(|_| "root".to_string());
-    let lang_var = std::env::var("LANG").unwrap_or_else(|_| "C.UTF-8".to_string());
-    let lc_all_var = std::env::var("LC_ALL").unwrap_or_default();
-    let term_var = std::env::var("TERM").unwrap_or_default();
-    let tmpdir_var = std::env::var("TMPDIR").unwrap_or_default();
-
-    format!(
-        "env -i PATH={} HOME={} USER={} LANG={} LC_ALL={} TERM={} TMPDIR={} /bin/sh -c {}",
-        shell_escape(&path_var),
-        shell_escape(&home_var),
-        shell_escape(&user_var),
-        shell_escape(&lang_var),
-        shell_escape(&lc_all_var),
-        shell_escape(&term_var),
-        shell_escape(&tmpdir_var),
-        shell_escape(shell_command)
-    )
+    let mut env = String::from("env -i");
+    for (key, value) in crate::sandbox_env() {
+        env.push(' ');
+        env.push_str(&key);
+        env.push('=');
+        env.push_str(&shell_escape(&value));
+    }
+    env.push_str(" /bin/sh -c ");
+    env.push_str(&shell_escape(shell_command));
+    env
 }
 
 /// Wrap a string in single quotes for safe shell interpolation.

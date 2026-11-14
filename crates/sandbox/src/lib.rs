@@ -50,6 +50,29 @@ pub struct SandboxSpec {
     pub network: bool,
 }
 
+/// Environment variables a sandboxed command may inherit (BC-4.4).
+///
+/// Everything else, including secrets such as `OPENAI_API_KEY`, is stripped.
+/// Values come from the current process; defaults keep a minimal, usable
+/// environment when a variable is unset.
+pub(crate) fn sandbox_env() -> Vec<(String, String)> {
+    [
+        ("PATH", ""),
+        ("HOME", ""),
+        ("USER", "root"),
+        ("LANG", "C.UTF-8"),
+        ("LC_ALL", ""),
+        ("TERM", ""),
+        ("TMPDIR", ""),
+    ]
+    .into_iter()
+    .map(|(key, default)| {
+        let value = std::env::var(key).unwrap_or_else(|_| default.to_string());
+        (key.to_string(), value)
+    })
+    .collect()
+}
+
 /// Build a [`tokio::process::Command`] that runs `shell_command` inside the
 /// sandbox described by `spec`.
 ///
