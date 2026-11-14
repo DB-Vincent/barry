@@ -4,7 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    # Run on every PR, including stacked PRs whose base is another feature
+    # branch (e.g. m4-sandbox -> m3-policy-engine -> main).
+    branches: ["**"]
 
 jobs:
   test:
