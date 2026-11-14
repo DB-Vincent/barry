@@ -8,7 +8,7 @@ barry is a terminal coding agent, in the same family as Claude Code, Codex and P
 
 - **Simplicity** — a minimal line REPL, no TUI. Keep the loop simple.
 - **Efficiency** — fast startup, low per-turn overhead, fat-LTO release build.
-- **Security** — every command runs in an OS sandbox (Seatbelt on macOS, bubblewrap + seccomp on Linux). Credential paths are read-denied by default. Rule precedence is deny > ask > allow. Every action is recorded in an append-only, hash-chained audit log with secrets redacted.
+- **Security** — every command runs in an OS sandbox (Seatbelt on macOS, bubblewrap + seccomp on Linux). Credential paths are read-denied where configured. Rule precedence is deny > ask > allow. Every action is recorded in an append-only, hash-chained audit log with secrets redacted.
 
 ## Platforms
 
@@ -21,6 +21,8 @@ Windows is not supported in v1.
 
 barry speaks OpenAI-compatible Chat Completions, so it works with OpenAI, vLLM, LM Studio, llama.cpp server, and Ollama (local). No Anthropic or Bedrock in v1. There is no MCP in v1.
 
+Point it at a server with `BARRY_BASE_URL` (default `http://localhost:11434/v1`).
+
 ## Installation
 
 ```bash
@@ -32,22 +34,6 @@ cargo build --release
 The release binary is at `target/release/barry`. Copy it onto your `PATH`. The workspace pins a stable toolchain via `rust-toolchain.toml`.
 
 ## Usage
-
-### Interactive REPL
-
-```bash
-cd my-project
-barry
-```
-
-barry starts a REPL in the current working directory. Slash commands:
-
-| Command | Meaning |
-|---------|---------|
-| `/exit` | Quit |
-| `/compact` | Force context compaction |
-| `/grants` | List path grants |
-| `/model <name>` | Switch model |
 
 ### Headless mode
 
@@ -62,56 +48,63 @@ Options:
 | Option | Meaning |
 |--------|---------|
 | `--json` | Emit each event as one JSONL line instead of pretty output |
-| `--model <name>` | Override the default model |
-| `--resume <id\|uuid-prefix>` | Rebuild history from a session log |
+| `--model <name>` | Override the model id sent to the provider |
+| `--resume <file\|prefix>` | Continue a session from its log file, or a timestamp/UUID prefix in the default session directory |
 
 Exit codes: `0` on success, `1` on error/aborted, `2` on config error, `3` on turn limit.
+
+Headless mode never prompts for approval: an action that needs approval is denied, and the model is told that approval is unavailable in headless mode.
 
 ### Other commands
 
 ```bash
 barry --version                 # print version and exit
-barry rules check "<command>"   # print the policy decision for a command
+barry rules check "<command>"   # print the policy decision and the deciding rule id
 barry log verify <file>         # verify the hash chain of a session log
 ```
 
+`log verify` prints `ok (<n> entries)` and exits 0. If a line was edited, it prints `broken at line <k>` and exits 1.
+
+### Interactive REPL (not implemented yet)
+
+Running `barry` with no `-p` currently exits 2 with an error. The planned REPL is a minimal line interface in the current working directory with these slash commands:
+
+| Command | Meaning |
+|---------|---------|
+| `/exit` | Quit |
+| `/compact` | Force context compaction |
+| `/grants` | List path grants |
+| `/model <name>` | Switch model |
+
 ## Configuration
 
-User config lives at `~/.config/barry/config.toml` (or `$BARRY_CONFIG` if set):
+User config is read from the file named by `$BARRY_CONFIG`; if the variable is unset or the file does not exist, built-in defaults apply. Supported keys today:
 
 ```toml
-default_model = "local"
-max_turns = 50
-
-[models.local]
-id = "qwen2.5-coder:14b"
-base_url = "http://localhost:11434/v1"
-context_window = 32768
-max_output_tokens = 8192
-compat = { reasoning_field = "reasoning", supports_parallel_tool_calls = true, supports_stream_usage = true }
-
 [sandbox]
-network = true
-env_passthrough = []
+network = true   # false: sandboxed commands cannot use the network
 
 [fs]
-extra_writable = []
-read_deny = []
-protected = []
+read_deny = []   # paths the model may not read, through the read tool or bash
+protected = []   # path components that always require approval to write
 ```
 
-Project config at `<git root>/.barry/config.toml` can tighten rules without trust; loosening rules and hooks require explicit user trust.
+The model id comes from `--model` (default `local`) and the endpoint from `BARRY_BASE_URL` (default `http://localhost:11434/v1`).
+
+The rest of the config schema in PLAN 6.8 — `~/.config/barry/config.toml` as the default path, `default_model`/`max_turns`, model profiles, `fs.extra_writable`, `sandbox.env_passthrough`, user rules, and trusted project config — is not implemented yet.
 
 ## Security model
 
 Two independent layers:
 
-1. **Policy layer** — parses commands and applies allow/deny/ask rules. Default deny rules cover `sudo`, `rm -rf /`, `curl ... | sh`, `git push --force`, etc. Default allow rules cover `ls`, `cargo test`, `git status`, etc.
-2. **Sandbox layer** — each command runs re-executed inside a sandbox. On Linux this requires `bwrap`; if `bwrap` is missing, commands fail closed and never run unsandboxed.
+1. **Policy layer** — path checks for reads and writes, plus a bash rule table. Default deny rules cover `sudo`, `rm -rf /`, `curl ... | sh`, `git push --force`, etc. Default allow rules cover `ls`, `cargo test`, `git status`, etc.
+2. **Sandbox layer** — each command is re-executed inside the sandbox. On Linux this requires `bwrap`; if `bwrap` is missing, commands fail closed and never run unsandboxed. Network access can be switched off with `sandbox.network = false`.
 
-File writes stay inside the current directory unless you grant a path. Credential paths (`~/.ssh`, `~/.aws`, etc.) are read-denied by default, so their contents never reach the model or the log unredacted.
+File writes stay inside the current directory unless you grant a path. Configured read-deny paths are refused without a prompt, so their contents never reach the model.
 
-Every session is logged to `~/.local/state/barry/sessions/` (or `$XDG_STATE_HOME`) as hash-chained JSONL. Run `barry log verify` to check integrity. The chain detects edits and middle deletions, but not truncation: deleting trailing entries (or the whole file) leaves a shorter chain that still verifies. Anchor the head hash elsewhere if you need to detect truncation.
+Every session appends to `~/.local/state/barry/sessions/` (or `$XDG_STATE_HOME/barry/sessions`) as JSONL. Each line carries the SHA-256 of the previous line and a hash of itself, so `barry log verify` can name the first edited line. Lines are `0600` in a `0700` directory, and one writer at a time is enforced with an advisory lock. Entries cover the session start (cwd, model, version, policy fingerprint), conversation messages, tool decisions (with the deciding rule id, user or default), tool results, grants, approved bash prefixes and notices. Decisions are written before the tool runs, so a crash cannot lose the audit trail.
+
+Secrets are redacted before an entry is hashed: built-in patterns (`sk-…`, GitHub tokens, AWS keys, JWTs, private keys) and the values of environment variables whose names contain `KEY`, `TOKEN`, `SECRET` or `PASSWORD`. Redaction applies only to the log; the model still sees real tool output. `barry --resume` verifies the chain before appending and refuses a broken log. The chain detects edits and middle deletions, but not truncation: deleting trailing entries (or the whole file) leaves a shorter chain that still verifies. Anchor the head hash elsewhere if you need to detect truncation.
 
 ## Business cases and testing
 
@@ -123,7 +116,7 @@ Tests check observable outcomes only: files on disk, events received, what the m
 
 ## Milestones
 
-barry is under active development. Each milestone is a separate branch and PR with its business-case tests written first.
+barry is under active development. Each milestone is a separate branch and PR with its business-case tests written first. M0–M5 are implemented; M6 is next (the REPL part of M2 is still pending).
 
 | Milestone | Focus |
 |-----------|-------|
@@ -143,14 +136,19 @@ barry is under active development. Each milestone is a separate branch and PR wi
 Implemented so far:
 
 - `barry --version` — prints `barry <semver>` and exits 0
-- `barry rules check "<command>"` — prints the policy decision for a command
-- Config loading with clean error messages (exit 2 on malformed config, no backtrace)
-- Streaming OpenAI-compatible client and the agent loop with `read`, `write`, `edit`, `bash` and the `agent` placeholder
+- `barry rules check "<command>"` — prints the policy decision and the deciding rule id
+- Config loading from `$BARRY_CONFIG` with clean error messages (exit 2 on malformed config, no backtrace)
+- Streaming OpenAI-compatible client and the agent loop with `read`, `write`, `edit`, `bash` and the `agent` placeholder (the placeholder refuses clearly; sub-agents are M8)
+- Headless `-p` mode with `--json`, wrapped tool results and the PLAN 5.2 system prompt
 - Policy approvals with session grants, and the Linux/macOS OS sandbox
-- Hash-chained, redacted session logs, `barry log verify` and `barry --resume`
+- Every session logged as hash-chained, redacted JSONL: `barry log verify <file>` and `barry --resume <file|prefix>`
 - Test utilities (`Workspace`, `ScriptedProvider`, `ScriptedApprover`, `FakeLlm`)
 
-The interactive REPL, context compaction, hooks, project trust and sub-agents are not implemented yet.
+Not implemented yet:
+
+- The interactive REPL, context compaction, AGENTS.md/skills, hooks, project trust and sub-agents
+- Model profiles and the rest of the config schema: only `sandbox.network`, `fs.read_deny` and `fs.protected` are read today
+- Built-in path defaults: with no `fs.read_deny` / `fs.protected` entries, no credential path is read-denied and no path component is protected
 
 ## Development
 
