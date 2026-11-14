@@ -130,6 +130,14 @@ impl Policy {
             }
         };
 
+        // Explicit grants always win: a grant to a protected directory
+        // (e.g. `.git`) is exactly what BC-4.5 asks for.
+        for grant in &self.grants {
+            if is_under(&canonical, grant) {
+                return (Decision::Allow, None);
+            }
+        }
+
         // Protected path components (e.g. `.git`, `.env`) always ask.
         // Check every component, not just the final one (PLAN 6.1.1).
         for component in canonical.components() {
@@ -188,8 +196,7 @@ impl Policy {
         };
         // Create the directory if it doesn't exist so bwrap can bind-mount it.
         let _ = std::fs::create_dir_all(&canonical);
-        self.grants.push(canonical.clone());
-        self.writable_roots.push(canonical);
+        self.grants.push(canonical);
         Ok(())
     }
 
@@ -204,9 +211,15 @@ impl Policy {
         &self.cwd
     }
 
-    /// Writable roots (cwd + extra + grants).
+    /// Writable roots (cwd + extra writable dirs). Grants are separate so the
+    /// sandbox can mount them after protected paths.
     pub fn writable_roots(&self) -> &[PathBuf] {
         &self.writable_roots
+    }
+
+    /// Explicit directory grants, mounted read-write after protected paths.
+    pub fn grants(&self) -> &[PathBuf] {
+        &self.grants
     }
 
     /// Read-deny paths (canonicalised).

@@ -38,9 +38,13 @@ pub struct SandboxSpec {
     pub cwd: PathBuf,
     /// Directories the command may write to (bind-mounted read-write).
     pub writable_roots: Vec<PathBuf>,
+    /// Explicit user grants. Mounted read-write *after* protected paths so a
+    /// grant overrides protection for the rest of the session (BC-4.5).
+    pub grants: Vec<PathBuf>,
     /// Directories/files the command may not read (masked or made inaccessible).
     pub read_deny: Vec<PathBuf>,
-    /// Paths mounted read-only (e.g. <root>/.git).
+    /// Paths mounted read-only after writable roots (e.g. <root>/.git), so
+    /// protection is not undone by a parent writable root (BC-4.5).
     pub protected_ro: Vec<PathBuf>,
     /// Whether network access is allowed.
     pub network: bool,

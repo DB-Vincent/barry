@@ -187,37 +187,13 @@ pub(crate) async fn execute_tool(
                 .unwrap_or(120);
 
             // Policy check: deny > grant > ask > allow.
-            let Some(policy_inner) = policy.as_mut() else {
+            let Some(policy) = policy.as_mut() else {
                 // No policy → run unsandboxed (backstop for headless/cli
                 // without policy).
                 return execute_bash_none(command, timeout_secs, cancel).await;
             };
-            let (decision, _rule_id) = policy_inner.check_bash(command);
+            let (decision, _rule_id) = policy.check_bash(command);
             match decision {
-                Decision::Allow => {
-                    let spec = SandboxSpec {
-                        cwd: policy_inner.cwd().to_path_buf(),
-                        writable_roots: policy_inner.writable_roots().to_vec(),
-                        read_deny: policy_inner.read_deny_paths().to_vec(),
-                        protected_ro: policy_inner
-                            .protected()
-                            .iter()
-                            .map(|p| policy_inner.cwd().join(p))
-                            .filter(|p| p.exists())
-                            .collect(),
-                        network: policy_inner.network(),
-                    };
-                    run_sandboxed_with_retry(
-                        spec,
-                        command,
-                        timeout_secs,
-                        cancel,
-                        policy,
-                        approver,
-                        call.id.clone(),
-                    )
-                    .await
-                }
                 Decision::Deny { reason } => Ok(ToolResult {
                     ok: false,
                     content: format!("bash denied: {reason}"),
@@ -231,8 +207,7 @@ pub(crate) async fn execute_tool(
                         reason,
                         grant_path: None,
                     };
-                    let choice = approver.decide(&req).await;
-                    match choice {
+                    match approver.decide(&req).await {
                         ApprovalChoice::Deny => Ok(ToolResult {
                             ok: false,
                             content: "denied by user".to_string(),
@@ -241,32 +216,30 @@ pub(crate) async fn execute_tool(
                         ApprovalChoice::Once | ApprovalChoice::AlwaysThisSession => {
                             // Grant the first word of the command as a session prefix.
                             if let Some(first_word) = command.split_whitespace().next() {
-                                policy_inner.approve_prefix(first_word);
+                                policy.approve_prefix(first_word);
                             }
-                            let spec = SandboxSpec {
-                                cwd: policy_inner.cwd().to_path_buf(),
-                                writable_roots: policy_inner.writable_roots().to_vec(),
-                                read_deny: policy_inner.read_deny_paths().to_vec(),
-                                protected_ro: policy_inner
-                                    .protected()
-                                    .iter()
-                                    .map(|p| policy_inner.cwd().join(p))
-                                    .filter(|p| p.exists())
-                                    .collect(),
-                                network: policy_inner.network(),
-                            };
                             run_sandboxed_with_retry(
-                                spec,
+                                policy,
                                 command,
                                 timeout_secs,
                                 cancel,
-                                policy,
                                 approver,
                                 call.id.clone(),
                             )
                             .await
                         }
                     }
+                }
+                Decision::Allow => {
+                    run_sandboxed_with_retry(
+                        policy,
+                        command,
+                        timeout_secs,
+                        cancel,
+                        approver,
+                        call.id.clone(),
+                    )
+                    .await
                 }
             }
         }
@@ -491,23 +464,38 @@ fn sandbox_denied(result: &ToolResult) -> bool {
 }
 
 /// Extracts the directory path that the sandbox denied access to.
-/// Looks for paths after `>` redirect targets in the command.
+/// Looks for a shell redirect target (`>`, `>>`, `2>`) in the command and
+/// returns its parent directory, e.g. `echo x > ../outside/f` → `../outside`.
 fn sandbox_denied_dir(_result: &ToolResult, command: &str) -> Option<std::path::PathBuf> {
     let parts: Vec<&str> = command.split_whitespace().collect();
-    for (i, part) in parts.iter().enumerate() {
-        let part = *part;
-        let target = if part.starts_with('>') && part.len() > 1 {
-            // `>path` form
-            part.trim_start_matches('>')
-        } else if part == ">" && i + 1 < parts.len() {
-            // `> path` form
-            parts[i + 1]
+    for (i, raw) in parts.iter().enumerate() {
+        let part = *raw;
+        let target = if let Some(rest) = part.strip_prefix(">>") {
+            if rest.is_empty() {
+                parts.get(i + 1).copied()
+            } else {
+                Some(rest)
+            }
+        } else if let Some(rest) = part.strip_prefix("2>") {
+            if rest.is_empty() {
+                parts.get(i + 1).copied()
+            } else {
+                Some(rest)
+            }
+        } else if let Some(rest) = part.strip_prefix('>') {
+            if rest.is_empty() {
+                parts.get(i + 1).copied()
+            } else {
+                Some(rest)
+            }
         } else {
-            continue;
+            None
         };
-        let path = std::path::Path::new(target);
-        // Return the parent directory of the target file.
-        return path.parent().map(|p| p.to_path_buf());
+
+        if let Some(target) = target {
+            let path = std::path::Path::new(target);
+            return path.parent().map(|p| p.to_path_buf());
+        }
     }
     None
 }
@@ -593,51 +581,65 @@ async fn run_bash_command(
     }
 }
 
+/// Build the sandbox spec from the current policy. Rebuilt after a grant so
+/// the retry sees the newly granted directory.
+fn sandbox_spec(policy: &Policy) -> SandboxSpec {
+    SandboxSpec {
+        cwd: policy.cwd().to_path_buf(),
+        writable_roots: policy.writable_roots().to_vec(),
+        grants: policy.grants().to_vec(),
+        read_deny: policy.read_deny_paths().to_vec(),
+        protected_ro: policy
+            .protected()
+            .iter()
+            .map(|p| policy.cwd().join(p))
+            .filter(|p| p.exists())
+            .collect(),
+        network: policy.network(),
+    }
+}
+
 /// Run bash inside the OS sandbox with denial-retry support.
 ///
 /// If the sandbox blocks the command (exit_code != 0, stderr contains a
 /// sandbox denial message), offer the user a directory grant and retry once
-/// (PLAN 6.2, BC-4.2).
+/// (PLAN 6.2, BC-4.2). If the user denies the grant, the original sandbox
+/// failure goes to the model unchanged.
 async fn run_sandboxed_with_retry(
-    spec: SandboxSpec,
+    policy: &mut Policy,
     command: &str,
     timeout_secs: u64,
     cancel: &CancellationToken,
-    policy: &mut Option<Policy>,
     approver: &Arc<dyn Approver>,
     call_id: String,
 ) -> Result<ToolResult, CoreError> {
-    match execute_bash_sandboxed(spec.clone(), command, timeout_secs, cancel).await {
-        Ok(result) if sandbox_denied(&result) => {
-            let target_dir = sandbox_denied_dir(&result, command);
-            let req = ApprovalRequest {
-                id: call_id,
-                tool: "bash".to_string(),
-                summary: format!("bash: {command}"),
-                reason: "sandbox blocked the command".to_string(),
-                grant_path: target_dir.clone(),
-            };
-            let choice = approver.decide(&req).await;
-            match choice {
-                ApprovalChoice::Deny => Ok(ToolResult {
-                    ok: false,
-                    content: "denied by user".to_string(),
-                    display: "denied by user".to_string(),
-                }),
-                ApprovalChoice::Once | ApprovalChoice::AlwaysThisSession => {
-                    if let Some(dir) = target_dir.clone() {
-                        if let Some(p) = policy {
-                            let _ = p.grant_dir(&dir);
-                        }
-                    }
-                    let mut retry_spec = spec;
-                    if let Some(dir) = target_dir {
-                        retry_spec.writable_roots.push(dir);
-                    }
-                    execute_bash_sandboxed(retry_spec, command, timeout_secs, cancel).await
-                }
-            }
+    let first = execute_bash_sandboxed(sandbox_spec(policy), command, timeout_secs, cancel).await?;
+    if !sandbox_denied(&first) {
+        return Ok(first);
+    }
+
+    // Only offer a grant when we can name the directory the sandbox refused.
+    let Some(target_dir) = sandbox_denied_dir(&first, command) else {
+        return Ok(first);
+    };
+
+    let req = ApprovalRequest {
+        id: call_id,
+        tool: "bash".to_string(),
+        summary: format!("bash: {command}"),
+        reason: "sandbox blocked the command".to_string(),
+        grant_path: Some(target_dir.clone()),
+    };
+
+    match approver.decide(&req).await {
+        // Denial: the model sees the original sandbox failure, not a generic
+        // "denied by user", so it can reason about the actual block.
+        ApprovalChoice::Deny => Ok(first),
+        ApprovalChoice::Once | ApprovalChoice::AlwaysThisSession => {
+            policy
+                .grant_dir(&target_dir)
+                .map_err(|e| CoreError::Provider(format!("failed to grant directory: {e}")))?;
+            execute_bash_sandboxed(sandbox_spec(policy), command, timeout_secs, cancel).await
         }
-        other => other,
     }
 }

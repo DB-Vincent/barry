@@ -6,11 +6,12 @@
 //!
 //! bwrap arguments:
 //!   bwrap --ro-bind / / --dev /dev --proc /proc
-//!         --bind <root> <root>           (each writable root, and TMPDIR)
+//!         --bind <root> <root>           (each writable root)
 //!         --ro-bind <p> <p>              (each protected_ro path that exists)
+//!         --bind <grant> <grant>         (each explicit grant)
 //!         --tmpfs <dir>                  (each read-deny directory that exists)
 //!         --ro-bind /dev/null <file>     (each read-deny file that exists)
-//!         --unshare-user --unshare-pid [--unshare-net if !network]
+//!         --unshare-user [--unshare-net if !network]
 //!         --die-with-parent --new-session --chdir <cwd>
 //!         -- <barry_exe> __sandbox-exec -- /bin/sh -c <cmd>
 
@@ -22,6 +23,14 @@ use std::process::Stdio;
 use crate::SandboxError;
 
 /// Build a bwrap [`tokio::process::Command`] for `shell_command`.
+///
+/// Mount order matters (BC-4.5):
+///   1. `--ro-bind / /` (everything read-only by default)
+///   2. writable roots (cwd + extras), read-write
+///   3. protected paths, read-only (must come after a writable parent so
+///      `.git` stays read-only inside a writable cwd)
+///   4. explicit grants, read-write (a grant overrides protection)
+///   5. read-deny masks (strongest: always hidden)
 pub(crate) fn command(
     spec: &crate::SandboxSpec,
     shell_command: &str,
@@ -33,30 +42,30 @@ pub(crate) fn command(
     cmd.arg("--dev").arg("/dev");
     cmd.arg("--proc").arg("/proc");
 
-    // Protected paths mounted read-only FIRST, so that writable roots
-    // (including grants) can override them when bind-mounted afterwards.
+    // Writable roots first, so a protected subdirectory can be re-mounted
+    // read-only afterwards.
+    for root in &spec.writable_roots {
+        cmd.arg("--bind").arg(root).arg(root);
+    }
+
+    // Protected paths are mounted read-only after the writable roots, so a
+    // writable cwd does not silently make `.git` writable again.
     for p in &spec.protected_ro {
         if p.exists() {
             cmd.arg("--ro-bind").arg(p).arg(p);
         }
     }
 
-    // Each writable root is bind-mounted read-write so writes inside it
-    // affect the host. TMPDIR is also bind-mounted so temp files work.
-    let mut roots: Vec<PathBuf> = spec.writable_roots.to_vec();
-    if let Ok(tmpdir) = std::env::var("TMPDIR") {
-        if !tmpdir.is_empty() {
-            let tmpdir_path = PathBuf::from(&tmpdir);
-            if tmpdir_path.exists() {
-                roots.push(tmpdir_path);
-            }
+    // Explicit user grants are mounted read-write last, overriding protection
+    // for exactly the directory the user approved (BC-4.5).
+    for grant in &spec.grants {
+        if grant.exists() {
+            cmd.arg("--bind").arg(grant).arg(grant);
         }
-    }
-    for root in &roots {
-        cmd.arg("--bind").arg(root).arg(root);
     }
 
     // Read-deny directories masked with tmpfs; read-deny files masked with /dev/null.
+    // Applied last so a grant cannot accidentally expose a read-denied path.
     for d in &spec.read_deny {
         if d.exists() && d.is_dir() {
             cmd.arg("--tmpfs").arg(d);
@@ -68,7 +77,7 @@ pub(crate) fn command(
         }
     }
 
-    // User namespace; optionally pid and network namespaces.
+    // User namespace; optionally a network namespace (network = false).
     cmd.arg("--unshare-user");
     if !spec.network {
         cmd.arg("--unshare-net");
@@ -84,12 +93,7 @@ pub(crate) fn command(
     let env_cmd = build_sandbox_env(shell_command);
 
     // Re-exec barry as the sandbox helper, which installs seccomp and runs the command.
-    // BARRY_BIN_OVERRIDE lets tests point to the real barry binary.
-    let barry_exe = std::env::var("BARRY_BIN_OVERRIDE")
-        .ok()
-        .map(PathBuf::from)
-        .or_else(|| std::env::current_exe().ok())
-        .ok_or_else(|| SandboxError::Other("cannot determine barry executable path".into()))?;
+    let barry_exe = helper_exe()?;
     cmd.arg("--")
         .arg(&barry_exe)
         .arg("__sandbox-exec")
@@ -102,6 +106,41 @@ pub(crate) fn command(
     cmd.process_group(0);
 
     Ok(cmd)
+}
+
+/// Locate the barry executable to re-exec as the sandbox helper.
+///
+/// In a normal run this is the running binary. Integration tests run as
+/// `target/<profile>/deps/<test>`, so fall back to the sibling
+/// `target/<profile>/barry`. `BARRY_BIN_OVERRIDE` is an explicit escape hatch
+/// (tests, unusual installs). Fails closed rather than running a non-barry
+/// binary as the helper.
+fn helper_exe() -> Result<PathBuf, SandboxError> {
+    if let Ok(path) = std::env::var("BARRY_BIN_OVERRIDE") {
+        if !path.is_empty() {
+            return Ok(PathBuf::from(path));
+        }
+    }
+
+    let exe = std::env::current_exe()
+        .map_err(|e| SandboxError::Other(format!("cannot determine executable path: {e}")))?;
+    if exe.file_stem().and_then(|s| s.to_str()) == Some("barry") {
+        return Ok(exe);
+    }
+
+    if let Some(candidate) = exe
+        .parent()
+        .and_then(|deps| deps.parent())
+        .map(|p| p.join("barry"))
+    {
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+    }
+
+    Err(SandboxError::Other(format!(
+        "cannot find the barry helper binary (looked next to {exe:?}); set BARRY_BIN_OVERRIDE"
+    )))
 }
 
 /// Build the inner shell command that runs under `env -i` to strip secrets.
@@ -196,7 +235,6 @@ fn install_seccomp_filter() -> Result<(), String> {
         libc::SYS_io_uring_register,
         libc::SYS_perf_event_open,
         libc::SYS_kexec_load,
-        libc::SYS_socket,
     ] {
         rules.insert(syscall, vec![]);
     }
