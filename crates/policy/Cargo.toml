@@ -6,3 +6,6 @@ edition = "2021"
 [dependencies]
 barry-protocol = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+barry-testkit = { workspace = true }

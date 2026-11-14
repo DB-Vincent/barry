@@ -17,6 +17,7 @@ tokio-util = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "process", "signal", "sync"] }
 
 [dev-dependencies]
+barry-testkit = { workspace = true }
 insta = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros"] }

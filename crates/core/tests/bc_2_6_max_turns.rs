@@ -84,6 +84,7 @@ async fn bc_2_6_turn_limit_emits_notice_and_stops() {
         },
         provider.clone(),
         Arc::new(LocalApprover),
+        None,
     )
     .expect("agent constructs");
 

@@ -111,6 +111,7 @@ async fn tool_result_content(
         },
         provider.clone(),
         Arc::new(LocalApprover),
+        None,
     )
     .expect("agent constructs");
 

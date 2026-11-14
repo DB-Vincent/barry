@@ -101,6 +101,7 @@ async fn bc_2_3_bash_exit_1_continues_turn() {
         },
         provider.clone(),
         approver,
+        None,
     )
     .expect("agent constructs");
 

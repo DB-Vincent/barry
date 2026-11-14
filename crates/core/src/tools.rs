@@ -3,8 +3,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use barry_protocol::{ToolCall, ToolSpec};
+use barry_policy::Policy;
+use barry_protocol::{ApprovalChoice, ApprovalRequest, Decision, ToolCall, ToolSpec};
 use serde_json::json;
+use std::path::Path;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
@@ -121,7 +123,8 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
 pub(crate) async fn execute_tool(
     call: &ToolCall,
     cfg: &Config,
-    _approver: &Arc<dyn Approver>,
+    policy: &mut Option<Policy>,
+    approver: &Arc<dyn Approver>,
     cancel: &CancellationToken,
 ) -> Result<ToolResult, CoreError> {
     match call.name.as_str() {
@@ -131,7 +134,7 @@ pub(crate) async fn execute_tool(
                 .get("path")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            execute_read(path).await
+            execute_read_with_policy(path, policy).await
         }
         "write" => {
             let path = call
@@ -144,7 +147,7 @@ pub(crate) async fn execute_tool(
                 .get("content")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            execute_write(path, content).await
+            execute_write_with_approval(&call.id, path, content, policy, approver, cancel).await
         }
         "edit" => {
             let path = call
@@ -162,7 +165,10 @@ pub(crate) async fn execute_tool(
                 .get("new_string")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            execute_edit(path, old_string, new_string).await
+            execute_edit_with_approval(
+                &call.id, path, old_string, new_string, policy, approver, cancel,
+            )
+            .await
         }
         "bash" => {
             // Unsandboxed bash is a development-only capability (PLAN line 617).
@@ -188,7 +194,44 @@ pub(crate) async fn execute_tool(
                 .and_then(|v| v.as_u64())
                 .map(|secs| secs.clamp(1, 600))
                 .unwrap_or(120);
-            execute_bash(command, timeout_secs, cancel).await
+
+            // Policy check: deny > grant > ask > allow.
+            let Some(policy) = policy.as_mut() else {
+                return execute_bash(command, timeout_secs, cancel).await;
+            };
+            let (decision, _rule_id) = policy.check_bash(command);
+            match decision {
+                Decision::Allow => execute_bash(command, timeout_secs, cancel).await,
+                Decision::Deny { reason } => Ok(ToolResult {
+                    ok: false,
+                    content: format!("bash denied: {reason}"),
+                    display: "bash denied".to_string(),
+                }),
+                Decision::Ask { reason } => {
+                    let req = ApprovalRequest {
+                        id: call.id.clone(),
+                        tool: "bash".to_string(),
+                        summary: format!("bash: {command}"),
+                        reason,
+                        grant_path: None,
+                    };
+                    let choice = approver.decide(&req).await;
+                    match choice {
+                        ApprovalChoice::Deny => Ok(ToolResult {
+                            ok: false,
+                            content: "denied by user".to_string(),
+                            display: "denied by user".to_string(),
+                        }),
+                        ApprovalChoice::Once | ApprovalChoice::AlwaysThisSession => {
+                            // Grant the first word of the command as a session prefix.
+                            if let Some(first_word) = command.split_whitespace().next() {
+                                policy.approve_prefix(first_word);
+                            }
+                            execute_bash(command, timeout_secs, cancel).await
+                        }
+                    }
+                }
+            }
         }
         // Advertised (PLAN 5.1, BC-2.11) so the model can see the interface,
         // but sub-agents arrive in M8 (PLAN 6.6). Say so plainly instead of
@@ -222,6 +265,35 @@ async fn execute_read(path: &str) -> Result<ToolResult, CoreError> {
         content: numbered.clone(),
         display: numbered,
     })
+}
+
+/// Run a read through the policy check before reading the file.
+async fn execute_read_with_policy(
+    path: &str,
+    policy: &Option<Policy>,
+) -> Result<ToolResult, CoreError> {
+    // No policy configured → no restrictions.
+    if let Some(policy) = policy {
+        match policy.check_read(Path::new(path)) {
+            Decision::Allow => {}
+            Decision::Deny { reason } => {
+                return Ok(ToolResult {
+                    ok: false,
+                    content: format!("read denied: {reason}"),
+                    display: "read denied".to_string(),
+                });
+            }
+            Decision::Ask { reason } => {
+                return Ok(ToolResult {
+                    ok: false,
+                    content: format!("read requires approval: {reason}"),
+                    display: "read requires approval".to_string(),
+                });
+            }
+        }
+    }
+
+    execute_read(path).await
 }
 
 async fn execute_write(path: &str, content: &str) -> Result<ToolResult, CoreError> {
@@ -266,6 +338,93 @@ async fn execute_edit(
                 n, old_string, path
             ),
             display: format!("found {} matches for '{}'; no changes made", n, old_string),
+        }),
+    }
+}
+
+/// Check whether a write to `path` is allowed by policy and user approval.
+///
+/// Returns `Ok(true)` if the write may proceed, `Ok(false)` if it was denied.
+/// On denial, the caller should produce an ok:false result telling the model
+/// the write was denied by the user.
+async fn check_write_approval(
+    call_id: &str,
+    path: &str,
+    tool: &str,
+    policy: &mut Option<Policy>,
+    approver: &Arc<dyn Approver>,
+    _cancel: &CancellationToken,
+) -> Result<bool, CoreError> {
+    // No policy configured → no restrictions.
+    let Some(policy) = policy.as_mut() else {
+        return Ok(true);
+    };
+
+    let (decision, grant_dir) = policy.check_write(Path::new(path));
+    match decision {
+        Decision::Allow => Ok(true),
+        Decision::Deny { reason: _ } => {
+            // Policy-level deny: no user prompt.
+            Ok(false)
+        }
+        Decision::Ask { reason } => {
+            let grant_path = grant_dir.clone();
+            let req = ApprovalRequest {
+                id: call_id.to_string(),
+                tool: tool.to_string(),
+                summary: format!("{tool} to {path}"),
+                reason,
+                grant_path: grant_dir,
+            };
+            let choice = approver.decide(&req).await;
+            match choice {
+                ApprovalChoice::Deny => Ok(false),
+                ApprovalChoice::Once | ApprovalChoice::AlwaysThisSession => {
+                    if let Some(dir) = grant_path {
+                        let _ = policy.grant_dir(&dir);
+                    }
+                    Ok(true)
+                }
+            }
+        }
+    }
+}
+
+/// Run a write through the policy + approval flow.
+async fn execute_write_with_approval(
+    call_id: &str,
+    path: &str,
+    content: &str,
+    policy: &mut Option<Policy>,
+    approver: &Arc<dyn Approver>,
+    _cancel: &CancellationToken,
+) -> Result<ToolResult, CoreError> {
+    match check_write_approval(call_id, path, "write", policy, approver, _cancel).await? {
+        true => execute_write(path, content).await,
+        false => Ok(ToolResult {
+            ok: false,
+            content: "denied by user".to_string(),
+            display: "denied by user".to_string(),
+        }),
+    }
+}
+
+/// Run an edit through the policy + approval flow.
+async fn execute_edit_with_approval(
+    call_id: &str,
+    path: &str,
+    old_string: &str,
+    new_string: &str,
+    policy: &mut Option<Policy>,
+    approver: &Arc<dyn Approver>,
+    _cancel: &CancellationToken,
+) -> Result<ToolResult, CoreError> {
+    match check_write_approval(call_id, path, "edit", policy, approver, _cancel).await? {
+        true => execute_edit(path, old_string, new_string).await,
+        false => Ok(ToolResult {
+            ok: false,
+            content: "denied by user".to_string(),
+            display: "denied by user".to_string(),
         }),
     }
 }

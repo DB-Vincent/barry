@@ -149,6 +149,7 @@ dependencies = [
  "barry-policy",
  "barry-protocol",
  "barry-sandbox",
+ "barry-testkit",
  "futures",
  "insta",
  "serde_json",
@@ -180,6 +181,7 @@ name = "barry-policy"
 version = "0.1.0"
 dependencies = [
  "barry-protocol",
+ "barry-testkit",
  "thiserror",
 ]
 

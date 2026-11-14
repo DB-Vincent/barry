@@ -1,6 +1,7 @@
 //! The `barry` binary: entry point, headless mode and (later) the REPL.
 
 use std::io::Write;
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
@@ -104,18 +105,39 @@ fn run_command(command: Commands) -> ExitCode {
     match command {
         Commands::Rules { command } => match command {
             Some(RulesCommands::Check { command }) => {
-                let policy = barry_policy::Policy::new().expect("policy");
-                match policy.check_bash(&command) {
+                let cfg = barry_policy::PolicyConfig {
+                    cwd: std::env::current_dir().unwrap_or_default(),
+                    home: std::env::var("HOME").map(PathBuf::from).unwrap_or_default(),
+                    extra_writable: vec![],
+                    read_deny: vec![],
+                    protected: vec![],
+                    rules: vec![],
+                };
+                let policy = barry_policy::Policy::new(cfg).expect("policy");
+                let (decision, rule_id) = policy.check_bash(&command);
+                match decision {
                     barry_protocol::Decision::Allow => {
-                        println!("allow");
+                        if let Some(id) = &rule_id {
+                            println!("allow (rule: {id})");
+                        } else {
+                            println!("allow");
+                        }
                         ExitCode::SUCCESS
                     }
                     barry_protocol::Decision::Deny { reason } => {
-                        eprintln!("deny: {reason}");
+                        if let Some(id) = &rule_id {
+                            eprintln!("deny: {reason} (rule: {id})");
+                        } else {
+                            eprintln!("deny: {reason}");
+                        }
                         ExitCode::from(1)
                     }
                     barry_protocol::Decision::Ask { reason } => {
-                        eprintln!("ask: {reason}");
+                        if let Some(id) = &rule_id {
+                            eprintln!("ask: {reason} (rule: {id})");
+                        } else {
+                            eprintln!("ask: {reason}");
+                        }
                         ExitCode::from(1)
                     }
                 }
@@ -153,7 +175,7 @@ async fn run_headless(cfg: Config, prompt: String, json: bool, model: Option<Str
             ..Compat::default()
         },
     ));
-    let mut agent = match Agent::new(cfg, provider, Arc::new(HeadlessApprover)) {
+    let mut agent = match Agent::new(cfg, provider, Arc::new(HeadlessApprover), None) {
         Ok(agent) => agent,
         Err(err) => {
             eprintln!("{err}");

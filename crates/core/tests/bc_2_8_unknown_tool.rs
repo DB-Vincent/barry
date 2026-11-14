@@ -106,6 +106,7 @@ async fn bc_2_8_unknown_tool_is_ok_false_result() {
         },
         provider.clone(),
         Arc::new(LocalApprover),
+        None,
     )
     .expect("agent constructs");
 

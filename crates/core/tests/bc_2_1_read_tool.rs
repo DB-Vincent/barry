@@ -118,6 +118,7 @@ async fn bc_2_1_read_tool_returns_numbered_contents() {
         },
         provider.clone(),
         approver,
+        None,
     )
     .expect("agent should construct");
 

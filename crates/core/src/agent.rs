@@ -4,6 +4,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use barry_llm::{LlmEvent, LlmRequest, Provider};
+use barry_policy::Policy;
 use barry_protocol::{Event, Message, StopReason};
 use futures::channel::mpsc;
 use futures::sink::SinkExt;
@@ -31,6 +32,7 @@ pub struct Agent {
     pub(crate) cfg: Config,
     provider: Arc<dyn Provider>,
     pub(crate) approver: Arc<dyn Approver>,
+    policy: Option<Policy>,
     history: Vec<Message>,
     /// Built once so every request carries the same prefix (PLAN 5.2).
     system_prompt: String,
@@ -41,6 +43,7 @@ impl Agent {
         cfg: crate::config::Config,
         provider: Arc<dyn Provider>,
         approver: Arc<dyn Approver>,
+        policy: Option<Policy>,
     ) -> Result<Self, CoreError> {
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         let date = crate::prompt::today();
@@ -57,6 +60,7 @@ impl Agent {
             cfg,
             provider,
             approver,
+            policy,
             history: Vec::new(),
             system_prompt,
         })
@@ -172,10 +176,15 @@ impl Agent {
                                         .map_err(|_| CoreError::ChannelClosed)?;
 
                                     // A tool error is a result, not a turn failure.
-                                    let result =
-                                        execute_tool(call, &self.cfg, &self.approver, &cancel)
-                                            .await
-                                            .unwrap_or_else(|err| ToolResult::internal_error(&err));
+                                    let result = execute_tool(
+                                        call,
+                                        &self.cfg,
+                                        &mut self.policy,
+                                        &self.approver,
+                                        &cancel,
+                                    )
+                                    .await
+                                    .unwrap_or_else(|err| ToolResult::internal_error(&err));
 
                                     events
                                         .send(Event::ToolFinished {

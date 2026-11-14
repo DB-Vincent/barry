@@ -105,6 +105,7 @@ async fn agent_tool_is_advertised_and_honestly_unavailable() {
         },
         provider.clone(),
         Arc::new(LocalApprover),
+        None,
     )
     .expect("agent constructs");
 
