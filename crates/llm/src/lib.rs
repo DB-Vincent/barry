@@ -1,6 +1,8 @@
 //! LLM client for barry.
 //! Provider trait and shared request/event types.
 
+#![forbid(unsafe_code)]
+
 use barry_protocol::{Message, StopReason, ToolSpec, Usage};
 use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};

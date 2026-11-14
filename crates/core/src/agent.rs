@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use barry_llm::{LlmEvent, LlmRequest, Provider};
 use barry_policy::Policy;
-use barry_protocol::{Event, Message, StopReason};
+use barry_protocol::{DecidedBy, Decision, Event, Message, StopReason, ToolCall};
 use futures::channel::mpsc;
 use futures::sink::SinkExt;
 use futures::stream::StreamExt;
@@ -39,6 +39,8 @@ pub struct Agent {
     system_prompt: String,
     /// Audit log, when a session is being recorded (PLAN 6.7).
     session: Option<SessionLog>,
+    /// Whether a session-log write failure has already been reported.
+    session_warned: bool,
 }
 
 impl Agent {
@@ -67,18 +69,22 @@ impl Agent {
             history: Vec::new(),
             system_prompt,
             session: None,
+            session_warned: false,
         })
     }
 
     /// Attach an audit log and record `session_start` (PLAN 6.7).
     pub fn with_session_log(mut self, mut log: SessionLog) -> Self {
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let _ = log.append(EntryKind::SessionStart {
+        if let Err(err) = log.append(EntryKind::SessionStart {
             cwd: cwd.display().to_string(),
             model: self.cfg.default_model.clone(),
             barry_version: env!("CARGO_PKG_VERSION").to_string(),
             policy_sha256: session::policy_fingerprint(self.policy.as_ref()),
-        });
+        }) {
+            self.session_warned = true;
+            eprintln!("warning: session log write failed: {err}");
+        }
         self.session = Some(log);
         self
     }
@@ -91,6 +97,14 @@ impl Agent {
         policy: Option<Policy>,
         session_file: &Path,
     ) -> Result<Self, CoreError> {
+        // Never extend a chain that does not verify: the audit trail is the
+        // point of resuming from it.
+        let report = session::verify(session_file).map_err(session_error)?;
+        if let Some(line) = report.broken_at {
+            return Err(CoreError::Session(format!(
+                "session log is broken at line {line}"
+            )));
+        }
         let history = session::replay_history(session_file).map_err(session_error)?;
         let log = SessionLog::open_append(session_file).map_err(session_error)?;
 
@@ -100,35 +114,36 @@ impl Agent {
         Ok(agent)
     }
 
-    /// Append one entry, ignoring I/O failures so the turn can continue.
+    /// Append one entry, warning once if the log becomes unwritable. The turn
+    /// continues: a full disk must not block the user's work, but it must not
+    /// be silent either.
     fn log(&mut self, kind: EntryKind) {
-        if let Some(session) = self.session.as_mut() {
-            let _ = session.append(kind);
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        if let Err(err) = session.append(kind) {
+            if !self.session_warned {
+                self.session_warned = true;
+                eprintln!("warning: session log write failed: {err}");
+            }
         }
     }
 
-    /// Record the decision and result of one tool call (BC-5.1).
-    fn log_tool(&mut self, call: &barry_protocol::ToolCall, result: &ToolResult) {
-        if self.session.is_none() {
-            return;
-        }
+    /// Record the decision for a call the agent never handed to `execute_tool`
+    /// (a cancelled call). Executed calls log their own decision before
+    /// running (BC-5.1).
+    fn log_decision(&mut self, call: &ToolCall, decision: Decision, decided_by: DecidedBy) {
         self.log(EntryKind::ToolDecision {
             call_id: call.id.clone(),
             tool: call.name.clone(),
             input: call.arguments.clone(),
-            decision: decision_label(&result.decision),
-            decided_by: decided_by_label(&result.decided_by),
+            decision: decision_label(&decision),
+            decided_by: decided_by_label(&decided_by),
         });
-        if let Some(dir) = &result.grant {
-            self.log(EntryKind::Grant {
-                dir: dir.display().to_string(),
-            });
-        }
-        if let Some(prefix) = &result.prefix {
-            self.log(EntryKind::PrefixApproved {
-                prefix: prefix.clone(),
-            });
-        }
+    }
+
+    /// Record the outcome after a tool finishes.
+    fn log_result(&mut self, call: &ToolCall, result: &ToolResult) {
         self.log(EntryKind::ToolResult {
             call_id: call.id.clone(),
             ok: result.ok,
@@ -221,7 +236,14 @@ impl Agent {
                                             .await
                                             .map_err(|_| CoreError::ChannelClosed)?;
                                         let interrupted = ToolResult::interrupted();
-                                        self.log_tool(call, &interrupted);
+                                        self.log_decision(
+                                            call,
+                                            Decision::Deny {
+                                                reason: "interrupted by user".to_string(),
+                                            },
+                                            DecidedBy::User,
+                                        );
+                                        self.log_result(call, &interrupted);
                                         let tool_message = Message::Tool {
                                             tool_call_id: call.id.clone(),
                                             content: wrap_tool_output(
@@ -255,6 +277,7 @@ impl Agent {
                                         &mut self.policy,
                                         &self.approver,
                                         &cancel,
+                                        self.session.as_mut(),
                                     )
                                     .await
                                     .unwrap_or_else(|err| ToolResult::internal_error(&err));
@@ -268,7 +291,7 @@ impl Agent {
                                         .await
                                         .map_err(|_| CoreError::ChannelClosed)?;
 
-                                    self.log_tool(call, &result);
+                                    self.log_result(call, &result);
 
                                     // PLAN 5: every result is wrapped, so the model can
                                     // tell tool output apart from conversation text.

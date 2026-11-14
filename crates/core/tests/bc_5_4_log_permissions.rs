@@ -26,3 +26,19 @@ fn bc_5_4_session_log_permissions() {
         & 0o777;
     assert_eq!(file_mode, 0o600, "session file is 0600");
 }
+
+/// BC-5.4-adjacent: a second writer cannot interleave appends and break the
+/// chain.
+#[test]
+fn bc_5_4_second_writer_is_refused() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let log = SessionLog::create_in(root.path(), "main").expect("create session log");
+
+    let err = SessionLog::open_append(log.path())
+        .err()
+        .expect("a second writer is refused");
+    assert!(
+        err.to_string().contains("already open"),
+        "the error explains the lock: {err}"
+    );
+}

@@ -1,6 +1,7 @@
 /// BC-5.2 `barry log verify` on an untouched log prints `ok` and exits 0.
 /// After one byte of any line is edited, it reports that line and exits 1.
 use barry_core::session::{EntryKind, SessionLog};
+use barry_testkit::{FakeLlm, Reply};
 
 fn verify(path: &std::path::Path) -> assert_cmd::Command {
     let mut cmd = assert_cmd::Command::cargo_bin("barry").expect("barry binary");
@@ -58,4 +59,42 @@ fn bc_5_2_verify_names_the_edited_line() {
         .assert()
         .code(1)
         .stdout(predicates::str::contains("broken at line 2"));
+}
+
+/// BC-5.2 A log written by a real headless session verifies end to end.
+#[tokio::test(flavor = "multi_thread")]
+async fn bc_5_2_headless_session_log_verifies() {
+    let state = tempfile::tempdir().expect("state dir");
+    let llm = FakeLlm::start(vec![Reply::Text {
+        content: "hi".to_string(),
+    }])
+    .await;
+
+    let out = tokio::process::Command::new(env!("CARGO_BIN_EXE_barry"))
+        .args(["-p", "hi"])
+        .env_remove("BARRY_CONFIG")
+        .env("XDG_STATE_HOME", state.path())
+        .env("BARRY_BASE_URL", llm.uri())
+        .output()
+        .await
+        .expect("barry runs");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "expected exit 0, stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let sessions = state.path().join("barry").join("sessions");
+    let path = std::fs::read_dir(&sessions)
+        .expect("sessions directory")
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| path.extension().is_some_and(|ext| ext == "jsonl"))
+        .expect("a session log was written");
+
+    verify(&path)
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("ok ("));
 }

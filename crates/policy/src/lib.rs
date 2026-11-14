@@ -4,6 +4,8 @@
 //! decisions for bash commands. Path canonicalisation rejects `..` and
 //! resolves symlinks (PLAN 6.1.1, BC-3.5).
 
+#![forbid(unsafe_code)]
+
 mod path;
 
 use std::path::{Component, Path, PathBuf};
@@ -220,6 +222,14 @@ impl Policy {
     /// Explicit directory grants, mounted read-write after protected paths.
     pub fn grants(&self) -> &[PathBuf] {
         &self.grants
+    }
+
+    /// Whether `path` lies under a directory granted this session.
+    pub fn is_granted(&self, path: &Path) -> bool {
+        let Ok(canonical) = canonicalise(&self.cwd, path) else {
+            return false;
+        };
+        self.grants.iter().any(|grant| is_under(&canonical, grant))
     }
 
     /// Read-deny paths (canonicalised).

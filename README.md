@@ -111,7 +111,7 @@ Two independent layers:
 
 File writes stay inside the current directory unless you grant a path. Credential paths (`~/.ssh`, `~/.aws`, etc.) are read-denied by default, so their contents never reach the model or the log unredacted.
 
-Every session is logged to `~/.local/state/barry/sessions/` (or `$XDG_STATE_HOME`) as hash-chained JSONL. Run `barry log verify` to check integrity.
+Every session is logged to `~/.local/state/barry/sessions/` (or `$XDG_STATE_HOME`) as hash-chained JSONL. Run `barry log verify` to check integrity. The chain detects edits and middle deletions, but not truncation: deleting trailing entries (or the whole file) leaves a shorter chain that still verifies. Anchor the head hash elsewhere if you need to detect truncation.
 
 ## Business cases and testing
 
@@ -145,9 +145,12 @@ Implemented so far:
 - `barry --version` — prints `barry <semver>` and exits 0
 - `barry rules check "<command>"` — prints the policy decision for a command
 - Config loading with clean error messages (exit 2 on malformed config, no backtrace)
+- Streaming OpenAI-compatible client and the agent loop with `read`, `write`, `edit`, `bash` and the `agent` placeholder
+- Policy approvals with session grants, and the Linux/macOS OS sandbox
+- Hash-chained, redacted session logs, `barry log verify` and `barry --resume`
 - Test utilities (`Workspace`, `ScriptedProvider`, `ScriptedApprover`, `FakeLlm`)
 
-The agent loop, LLM client streaming, OS sandbox, and audit log are planned but not yet implemented.
+The interactive REPL, context compaction, hooks, project trust and sub-agents are not implemented yet.
 
 ## Development
 

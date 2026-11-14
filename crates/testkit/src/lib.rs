@@ -1,6 +1,8 @@
 //! Test utilities for barry.
 //! Provides Workspace, ScriptedProvider, ScriptedApprover, FakeLlm.
 
+#![forbid(unsafe_code)]
+
 pub mod fake_llm;
 pub mod scripted;
 pub mod workspace;

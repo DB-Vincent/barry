@@ -1,5 +1,7 @@
 //! The `barry` binary: entry point, headless mode and (later) the REPL.
 
+#![forbid(unsafe_code)]
+
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -187,13 +189,15 @@ fn run_command(command: Commands) -> ExitCode {
 }
 
 async fn run_headless(
-    cfg: Config,
+    mut cfg: Config,
     prompt: String,
     json: bool,
     model: Option<String>,
     resume: Option<String>,
 ) -> ExitCode {
     let model = model.unwrap_or_else(|| cfg.default_model.clone());
+    // The audit log records the model actually used, including --model.
+    cfg.default_model = model.clone();
 
     // Temporary provider wiring until PLAN 6.8 model profiles (M6): the base
     // URL comes from the environment, with a local-server default.
@@ -233,9 +237,12 @@ async fn run_headless(
 
     let mut agent = match resume {
         Some(spec) => {
-            let Some(path) = session::resolve_session(&spec) else {
-                eprintln!("error: no session log matches {spec:?}");
-                return ExitCode::from(2);
+            let path = match session::resolve_session(&spec) {
+                Ok(path) => path,
+                Err(err) => {
+                    eprintln!("{err}");
+                    return ExitCode::from(2);
+                }
             };
             match Agent::resume(
                 cfg,

@@ -1,5 +1,7 @@
 //! Core agent loop for barry.
 
+#![forbid(unsafe_code)]
+
 use std::future::Future;
 use std::pin::Pin;
 

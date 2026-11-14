@@ -8,6 +8,11 @@
 //! bytes. A `prev` chain alone can only detect a changed line when the *next*
 //! line is read (and never detects a change to the last line), so the self
 //! hash lets `verify` name the exact edited line.
+//!
+//! The chain is tamper-evident against edits and middle deletions, but not
+//! against truncation: deleting trailing entries (or the whole file) leaves a
+//! shorter chain that still verifies. Anchor the head hash elsewhere if
+//! truncation must be detectable.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
@@ -56,7 +61,8 @@ pub enum EntryKind {
         call_id: String,
         tool: String,
         input: Value,
-        /// `allow`, `ask: <reason>` or `deny: <reason>`.
+        /// The resolved decision: `allow` or `deny: <reason>`. Approvals are
+        /// resolved before logging; `decided_by` records who resolved them.
         decision: String,
         /// `rule:<id>`, `user`, `hook:<id>` or `default`.
         decided_by: String,
@@ -150,18 +156,20 @@ impl SessionLog {
 
         let mut next_seq = 0;
         let mut prev = ZERO_HASH.to_string();
+        let mut agent_id = "main".to_string();
         if let Some(last) = content.split('\n').rfind(|line| !line.is_empty()) {
             let entry: Entry = serde_json::from_str(last)
                 .map_err(|err| SessionError::Format(format!("last line: {err}")))?;
             next_seq = entry.seq + 1;
             prev = sha256_hex(last.as_bytes());
+            agent_id = entry.agent_id;
         }
 
         let file = open_private_file(path)?;
         Ok(Self {
             path: path.to_path_buf(),
             file,
-            agent_id: "main".to_string(),
+            agent_id,
             next_seq,
             prev,
             redactor: Redactor::from_env(),
@@ -271,9 +279,13 @@ pub(crate) fn replay_history(path: &Path) -> Result<Vec<Message>, SessionError> 
     let mut messages: Vec<(u64, Message)> = Vec::new();
     let mut removed: Vec<(u64, u64)> = Vec::new();
 
-    for line in content.split('\n').filter(|line| !line.is_empty()) {
+    for (index, line) in content
+        .split('\n')
+        .filter(|line| !line.is_empty())
+        .enumerate()
+    {
         let entry: Entry = serde_json::from_str(line)
-            .map_err(|err| SessionError::Format(format!("line {}: {err}", messages.len())))?;
+            .map_err(|err| SessionError::Format(format!("line {}: {err}", index + 1)))?;
         match entry.kind {
             EntryKind::Message { message } => {
                 if !matches!(message, Message::System { .. }) {
@@ -308,47 +320,68 @@ pub fn default_session_dir() -> PathBuf {
 
 /// Resolve a `--resume` argument: an existing file path, or a filename
 /// fragment (timestamp or UUID prefix) inside the default session directory.
-pub fn resolve_session(spec: &str) -> Option<PathBuf> {
+///
+/// An ambiguous prefix is an error rather than an arbitrary pick.
+pub fn resolve_session(spec: &str) -> Result<PathBuf, SessionError> {
     let direct = PathBuf::from(spec);
     if direct.is_file() {
-        return Some(direct);
+        return Ok(direct);
     }
 
-    let entries = fs::read_dir(default_session_dir()).ok()?;
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if name.ends_with(".jsonl") && name.contains(spec) {
-            return Some(entry.path());
+    let mut matches = Vec::new();
+    if let Ok(entries) = fs::read_dir(default_session_dir()) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.ends_with(".jsonl") && name.contains(spec) {
+                matches.push(entry.path());
+            }
         }
     }
-    None
+    matches.sort();
+
+    match matches.len() {
+        1 => Ok(matches.remove(0)),
+        0 => Err(SessionError::Format(format!(
+            "no session log matches {spec:?}"
+        ))),
+        count => Err(SessionError::Format(format!(
+            "{spec:?} matches {count} session logs; use a longer prefix or a path"
+        ))),
+    }
 }
 
 /// A stable fingerprint of the effective policy, for `session_start`.
 pub(crate) fn policy_fingerprint(policy: Option<&Policy>) -> String {
+    /// Hash one field with its length, so concatenated values cannot collide.
+    fn field(hasher: &mut Sha256, bytes: &[u8]) {
+        hasher.update((bytes.len() as u64).to_le_bytes());
+        hasher.update(bytes);
+    }
+
     let mut hasher = Sha256::new();
+    field(&mut hasher, b"barry-policy-v1");
     match policy {
-        None => hasher.update(b"no-policy"),
+        None => field(&mut hasher, b"no-policy"),
         Some(policy) => {
-            hasher.update(policy.cwd().display().to_string().as_bytes());
+            field(&mut hasher, policy.cwd().display().to_string().as_bytes());
             for path in policy.writable_roots() {
-                hasher.update(path.display().to_string().as_bytes());
+                field(&mut hasher, path.display().to_string().as_bytes());
             }
             for path in policy.grants() {
-                hasher.update(path.display().to_string().as_bytes());
+                field(&mut hasher, path.display().to_string().as_bytes());
             }
             for path in policy.read_deny_paths() {
-                hasher.update(path.display().to_string().as_bytes());
+                field(&mut hasher, path.display().to_string().as_bytes());
             }
             for component in policy.protected() {
-                hasher.update(component.as_bytes());
+                field(&mut hasher, component.as_bytes());
             }
             for rule in policy.rules() {
-                hasher.update(rule.id.as_bytes());
-                hasher.update(rule.r#match.as_bytes());
-                hasher.update(format!("{:?}", rule.decision).as_bytes());
+                field(&mut hasher, rule.id.as_bytes());
+                field(&mut hasher, rule.r#match.as_bytes());
+                field(&mut hasher, format!("{:?}", rule.decision).as_bytes());
             }
-            hasher.update([u8::from(policy.network())]);
+            field(&mut hasher, &[u8::from(policy.network())]);
         }
     }
     hex_digest(hasher.finalize())
@@ -425,6 +458,23 @@ fn open_private_file(path: &Path) -> Result<File, SessionError> {
         path: path.display().to_string(),
         source,
     })?;
+
+    // Hold an exclusive advisory lock for the life of the log so two barry
+    // processes cannot interleave appends and break the chain. Filesystems
+    // without advisory locking keep working.
+    match file.try_lock() {
+        Ok(()) => {}
+        Err(std::fs::TryLockError::WouldBlock) => {
+            return Err(SessionError::Io {
+                path: path.display().to_string(),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::WouldBlock,
+                    "session log is already open by another barry process",
+                ),
+            });
+        }
+        Err(_) => {}
+    }
 
     #[cfg(unix)]
     {
