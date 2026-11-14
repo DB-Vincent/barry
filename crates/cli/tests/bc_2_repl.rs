@@ -290,6 +290,22 @@ async fn bc_2_15_ctrl_c_cancels_the_turn_and_the_repl_continues() {
         .expect("send SIGINT");
     assert!(signalled.success(), "SIGINT was delivered");
 
+    // Wait for the cancelled turn to finish before typing ahead: an approval
+    // prompt still blocked on stdin would otherwise eat the next prompt.
+    let cancelled = tokio::time::timeout(Duration::from_secs(10), async {
+        while let Ok(Some(line)) = lines.next_line().await {
+            seen.push_str(&line);
+            seen.push('\n');
+            if line.contains("cancelled") {
+                return true;
+            }
+        }
+        false
+    })
+    .await
+    .unwrap_or(false);
+    assert!(cancelled, "the turn was cancelled; saw: {seen:?}");
+
     // The cancelled turn must not swallow the next prompt.
     stdin
         .write_all(b"hi\n/exit\n")
