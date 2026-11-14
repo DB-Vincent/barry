@@ -65,16 +65,16 @@ barry log verify <file>         # verify the hash chain of a session log
 
 `log verify` prints `ok (<n> entries)` and exits 0. If a line was edited, it prints `broken at line <k>` and exits 1.
 
-### Interactive REPL (not implemented yet)
+### Interactive REPL
 
-Running `barry` with no `-p` currently exits 2 with an error. The planned REPL is a minimal line interface in the current working directory with these slash commands:
+Running `barry` with no `-p` starts a minimal line REPL in the current working directory. Answers stream to stdout, tool calls print as `● bash: cargo test` followed by `✓`/`✗`, and actions that need approval prompt over the same input stream for `[o]nce / [a]lways this session / [d]eny`. Ctrl-C cancels the current turn, and twice at an empty prompt exits. Slash commands:
 
 | Command | Meaning |
 |---------|---------|
 | `/exit` | Quit |
-| `/compact` | Force context compaction |
+| `/compact` | Force context compaction (not implemented until M6) |
 | `/grants` | List path grants |
-| `/model <name>` | Switch model |
+| `/model <name>` | Switch model for the next request |
 
 ## Configuration
 
@@ -116,7 +116,7 @@ Tests check observable outcomes only: files on disk, events received, what the m
 
 ## Milestones
 
-barry is under active development. Each milestone is a separate branch and PR with its business-case tests written first. M0–M5 are implemented; M6 is next (the REPL part of M2 is still pending).
+barry is under active development. Each milestone is a separate branch and PR with its business-case tests written first. M0–M5 are implemented, including the REPL; M6 is next.
 
 | Milestone | Focus |
 |-----------|-------|
@@ -139,6 +139,7 @@ Implemented so far:
 - `barry rules check "<command>"` — prints the policy decision and the deciding rule id
 - Config loading from `$BARRY_CONFIG` with clean error messages (exit 2 on malformed config, no backtrace)
 - Streaming OpenAI-compatible client and the agent loop with `read`, `write`, `edit`, `bash` and the `agent` placeholder (the placeholder refuses clearly; sub-agents are M8)
+- Interactive REPL with streaming output, tool lines, stdin approvals, `/exit`, `/grants`, `/model` and Ctrl-C cancellation (`/compact` is a stub until M6)
 - Headless `-p` mode with `--json`, wrapped tool results and the PLAN 5.2 system prompt
 - Policy approvals with session grants, and the Linux/macOS OS sandbox
 - Every session logged as hash-chained, redacted JSONL: `barry log verify <file>` and `barry --resume <file|prefix>`
@@ -146,7 +147,7 @@ Implemented so far:
 
 Not implemented yet:
 
-- The interactive REPL, context compaction, AGENTS.md/skills, hooks, project trust and sub-agents
+- Context compaction, AGENTS.md/skills, hooks, project trust and sub-agents
 - Model profiles and the rest of the config schema: only `sandbox.network`, `fs.read_deny` and `fs.protected` are read today
 - Built-in path defaults: with no `fs.read_deny` / `fs.protected` entries, no credential path is read-denied and no path component is protected
 
