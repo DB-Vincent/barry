@@ -1,5 +1,5 @@
 ---
-source: crates/core/tests/bc_2_11_prompt_snapshot.rs
+source: crates/core/tests/it/bc_2_11_prompt_snapshot.rs
 expression: normalized
 ---
 You are barry, a coding agent working in the user's terminal.

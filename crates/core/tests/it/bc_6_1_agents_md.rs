@@ -7,10 +7,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 use barry_core::testing::instructions_section;
 use std::path::PathBuf;
-use std::sync::Mutex;
 
-/// Serializes `HOME` env var access across parallel test threads.
-static HOME_LOCK: Mutex<()> = Mutex::new(());
+use crate::HOME_LOCK;
 
 fn with_home<F: FnOnce() -> R, R>(home: &tempfile::TempDir, f: F) -> R {
     let _guard = HOME_LOCK.lock().unwrap();

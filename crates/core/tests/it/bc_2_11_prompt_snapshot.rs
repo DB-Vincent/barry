@@ -15,8 +15,7 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-/// Serializes `HOME` env var access across parallel test threads.
-static HOME_LOCK: Mutex<()> = Mutex::new(());
+use crate::HOME_LOCK;
 
 use barry_core::config::Config;
 use barry_core::{Agent, Approver, BoxFuture};

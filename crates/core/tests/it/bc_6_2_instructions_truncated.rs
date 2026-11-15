@@ -5,9 +5,8 @@
 )]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 use barry_core::testing::instructions_section;
-use std::sync::Mutex;
 
-static HOME_LOCK: Mutex<()> = Mutex::new(());
+use crate::HOME_LOCK;
 
 fn with_home<F: FnOnce() -> R, R>(home: &tempfile::TempDir, f: F) -> R {
     let _guard = HOME_LOCK.lock().unwrap();
