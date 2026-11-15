@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use barry_llm::{LlmEvent, LlmRequest, Provider};
 use barry_policy::Policy;
-use barry_protocol::{DecidedBy, Decision, Event, Message, StopReason, ToolCall};
+use barry_protocol::{DecidedBy, Decision, Event, Message, StopReason, ToolCall, Usage};
 use futures::channel::mpsc;
 use futures::sink::SinkExt;
 use futures::stream::StreamExt;
@@ -67,6 +67,14 @@ pub struct Agent {
     context_window: u64,
     /// Number of compactions performed in the current `run_turn` (PLAN 6.4).
     compactions: u64,
+    /// Usage the provider reported for the last response (#23).
+    last_usage: Option<Usage>,
+    /// Input tokens the provider reported for the last response (#23).
+    last_input_tokens: u64,
+    /// Output tokens the provider reported for the last response.
+    last_output_tokens: u64,
+    /// History size at the moment that response arrived.
+    bytes_at_response: u64,
     /// Audit log, when a session is being recorded (PLAN 6.7).
     session: Option<SessionLog>,
     /// Whether a session-log write failure has already been reported.
@@ -118,6 +126,10 @@ impl Agent {
             system_prompt,
             context_window,
             compactions: 0,
+            last_usage: None,
+            last_input_tokens: 0,
+            last_output_tokens: 0,
+            bytes_at_response: 0,
             session: None,
             session_warned: false,
             hooks,
@@ -208,9 +220,18 @@ impl Agent {
         self.history.iter().map(message_bytes).sum()
     }
 
-    /// Rough token estimate: bytes / 4 (PLAN 6.4).
+    /// Token estimate for compaction (PLAN 6.4, #23).
+    ///
+    /// The provider reports how many tokens the last request actually cost, so
+    /// that number is used and only the messages added since fall back to the
+    /// bytes / 4 heuristic. Without a report the whole history is estimated.
     fn estimate_tokens(&self) -> u64 {
-        self.history_bytes() / 4
+        let reported = self.last_input_tokens + self.last_output_tokens;
+        if reported == 0 {
+            return self.history_bytes() / 4;
+        }
+        let added = self.history_bytes().saturating_sub(self.bytes_at_response);
+        reported + added / 4
     }
 
     /// Compaction threshold: context window minus a safety reserve.
@@ -428,7 +449,7 @@ impl Agent {
                 events
                     .send(Event::TurnFinished {
                         stop: StopReason::ContextFull,
-                        usage: None,
+                        usage: self.last_usage.clone(),
                     })
                     .await
                     .map_err(|_| CoreError::ChannelClosed)?;
@@ -463,8 +484,20 @@ impl Agent {
                             .await
                             .map_err(|_| CoreError::ChannelClosed)?;
                     }
-                    LlmEvent::Done { message, stop, .. } => {
+                    LlmEvent::Done {
+                        message,
+                        stop,
+                        usage,
+                    } => {
                         self.history.push(message.clone());
+                        // A reported usage replaces the byte estimate for
+                        // everything up to this response (#23).
+                        if let Some(usage) = usage.clone() {
+                            self.last_input_tokens = usage.input_tokens;
+                            self.last_output_tokens = usage.output_tokens;
+                            self.bytes_at_response = self.history_bytes();
+                        }
+                        self.last_usage = usage;
                         self.log(EntryKind::Message {
                             message: message.clone(),
                         });
@@ -472,7 +505,10 @@ impl Agent {
                         match stop {
                             StopReason::Stop => {
                                 events
-                                    .send(Event::TurnFinished { stop, usage: None })
+                                    .send(Event::TurnFinished {
+                                        stop,
+                                        usage: self.last_usage.clone(),
+                                    })
                                     .await
                                     .map_err(|_| CoreError::ChannelClosed)?;
                                 return Ok(StopReason::Stop);
@@ -576,7 +612,7 @@ impl Agent {
                                     events
                                         .send(Event::TurnFinished {
                                             stop: StopReason::Aborted,
-                                            usage: None,
+                                            usage: self.last_usage.clone(),
                                         })
                                         .await
                                         .map_err(|_| CoreError::ChannelClosed)?;
@@ -586,7 +622,10 @@ impl Agent {
                             }
                             StopReason::Aborted => {
                                 events
-                                    .send(Event::TurnFinished { stop, usage: None })
+                                    .send(Event::TurnFinished {
+                                        stop,
+                                        usage: self.last_usage.clone(),
+                                    })
                                     .await
                                     .map_err(|_| CoreError::ChannelClosed)?;
                                 return Ok(StopReason::Aborted);
@@ -613,7 +652,7 @@ impl Agent {
         events
             .send(Event::TurnFinished {
                 stop: StopReason::Stop,
-                usage: None,
+                usage: self.last_usage.clone(),
             })
             .await
             .map_err(|_| CoreError::ChannelClosed)?;
