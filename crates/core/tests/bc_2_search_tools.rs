@@ -1,8 +1,10 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
+use barry_core::Agent;
 /// The read-only `glob`, `grep` and `ls` tools go through the read policy:
 /// a read-denied root is refused, read-denied entries inside an allowed root
 /// are neither listed nor searched, and no approval prompt appears.
 use barry_core::config::Config;
-use barry_core::Agent;
 use barry_llm::{LlmEvent, LlmRequest};
 use barry_policy::{Policy, PolicyConfig};
 use barry_protocol::{Message, StopReason};
@@ -118,13 +120,16 @@ async fn search_tools_respect_read_deny() {
             max_turns: 10,
             context_window: 32_768,
             sandbox_network: true,
+            sandbox_unsandboxed: false,
+            redact_tool_output: false,
             fs_read_deny: vec![],
             fs_protected: vec![],
+            rules: vec![],
             hooks: vec![],
         },
         provider.clone(),
         Arc::new(ScriptedApprover::none()),
-        Some(policy),
+        policy,
     )
     .expect("agent constructs");
 

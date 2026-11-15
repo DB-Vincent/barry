@@ -1,10 +1,12 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
+use barry_core::Agent;
 /// BC-3.3 If the user approves, the file is written. A second write to the
 /// same directory does not ask. A write to a different outside directory
 /// asks again.
 ///
 /// All within one session (one Agent with one Policy carrying grants).
 use barry_core::config::Config;
-use barry_core::Agent;
 use barry_llm::{LlmEvent, LlmRequest};
 use barry_policy::{Policy, PolicyConfig};
 use barry_protocol::{Message, StopReason};
@@ -120,13 +122,16 @@ async fn bc_3_3_grant_persists_in_session_same_dir_different_dir_asks() {
             max_turns: 10,
             context_window: 32_768,
             sandbox_network: true,
+            sandbox_unsandboxed: false,
+            redact_tool_output: false,
             fs_read_deny: vec![],
             fs_protected: vec![],
+            rules: vec![],
             hooks: vec![],
         },
         provider.clone(),
         approver_clone,
-        Some(policy),
+        policy,
     )
     .expect("agent constructs");
 

@@ -7,6 +7,7 @@
 //! never followed, so a link cannot lead the walk out of the searched tree.
 //! All output is bounded.
 
+use std::fmt::Write as _;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -16,7 +17,112 @@ use barry_protocol::Decision;
 use regex::{Regex, RegexBuilder};
 use serde_json::Value;
 
-use super::ToolResult;
+use barry_protocol::ToolSpec;
+use futures::future::BoxFuture;
+use serde_json::json;
+
+use super::read::read_gate;
+use super::{Tool, ToolCtx, ToolResult};
+use crate::CoreError;
+
+pub(super) struct GlobTool;
+pub(super) struct GrepTool;
+pub(super) struct LsTool;
+
+impl Tool for GlobTool {
+    fn spec(&self) -> ToolSpec {
+        ToolSpec {
+            name: "glob".to_string(),
+            description:
+                "List files whose path matches a glob pattern (read-only, at most 1000 results)"
+                    .to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "Glob such as \"*.rs\" (any depth) or \"src/**/*.rs\""
+                    },
+                    "path": { "type": "string", "description": "Directory to search (default: current directory)" }
+                },
+                "required": ["pattern"]
+            }),
+        }
+    }
+
+    fn execute<'a>(&'a self, ctx: ToolCtx<'a>) -> BoxFuture<'a, Result<ToolResult, CoreError>> {
+        Box::pin(run_search(ctx, "glob"))
+    }
+}
+
+impl Tool for GrepTool {
+    fn spec(&self) -> ToolSpec {
+        ToolSpec {
+            name: "grep".to_string(),
+            description: "Search file contents with a regex and return path:line: text (read-only, at most 200 matches)".to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "pattern": { "type": "string", "description": "Regular expression" },
+                    "path": { "type": "string", "description": "File or directory to search (default: current directory)" },
+                    "glob": { "type": "string", "description": "Only search files whose path matches this glob" },
+                    "case_insensitive": { "type": "boolean", "description": "Ignore case (default false)" }
+                },
+                "required": ["pattern"]
+            }),
+        }
+    }
+
+    fn execute<'a>(&'a self, ctx: ToolCtx<'a>) -> BoxFuture<'a, Result<ToolResult, CoreError>> {
+        Box::pin(run_search(ctx, "grep"))
+    }
+}
+
+impl Tool for LsTool {
+    fn spec(&self) -> ToolSpec {
+        ToolSpec {
+            name: "ls".to_string(),
+            description: "List the entries of a directory; directories end in / (read-only)"
+                .to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Directory to list (default: current directory)" }
+                },
+                "required": []
+            }),
+        }
+    }
+
+    fn execute<'a>(&'a self, ctx: ToolCtx<'a>) -> BoxFuture<'a, Result<ToolResult, CoreError>> {
+        Box::pin(run_search(ctx, "ls"))
+    }
+}
+
+/// Run `glob`, `grep` or `ls`. The search root goes through the read gate
+/// (one logged decision per call); the walk then applies the read policy to
+/// every entry it visits.
+async fn run_search(mut ctx: ToolCtx<'_>, tool: &'static str) -> Result<ToolResult, CoreError> {
+    let root = ctx.str_arg("path");
+    let root = if root.is_empty() {
+        ".".to_string()
+    } else {
+        root
+    };
+    if let Some(denied) = read_gate(&mut ctx, tool, &root)? {
+        return Ok(denied);
+    }
+    // The walk is blocking filesystem work: keep it off the async workers.
+    let arguments = ctx.arguments.clone();
+    let policy = ctx.policy.clone();
+    tokio::task::spawn_blocking(move || match tool {
+        "glob" => run_glob(&arguments, &policy),
+        "grep" => run_grep(&arguments, &policy),
+        _ => run_ls(&arguments, &policy),
+    })
+    .await
+    .map_err(|e| CoreError::Provider(format!("search task failed: {e}")))
+}
 
 /// Longest glob/ls listing, in entries.
 const MAX_ENTRIES: usize = 1_000;
@@ -39,11 +145,8 @@ fn ok(content: String) -> ToolResult {
     ToolResult::new(true, content.clone(), content)
 }
 
-fn readable(policy: &Option<Policy>, path: &Path) -> bool {
-    match policy {
-        Some(policy) => matches!(policy.check_read(path), Decision::Allow),
-        None => true,
-    }
+fn readable(policy: &Policy, path: &Path) -> bool {
+    matches!(policy.check_read(path), Decision::Allow)
 }
 
 /// How a path is shown to the model: relative to the search root, joined
@@ -145,7 +248,7 @@ struct Walk {
 
 /// Walks `root` depth-first in name order, collecting readable regular files.
 /// Read-denied directories are not entered. Symlinks are skipped.
-fn walk_files(root: &Path, policy: &Option<Policy>) -> Walk {
+fn walk_files(root: &Path, policy: &Policy) -> Walk {
     let mut walk = Walk {
         files: Vec::new(),
         capped: false,
@@ -156,7 +259,7 @@ fn walk_files(root: &Path, policy: &Option<Policy>) -> Walk {
             continue;
         };
         let mut entries: Vec<_> = read_dir.filter_map(Result::ok).collect();
-        entries.sort_by_key(|e| e.file_name());
+        entries.sort_by_key(std::fs::DirEntry::file_name);
         // Push directories in reverse so they pop in name order.
         let mut dirs = Vec::new();
         for entry in entries {
@@ -186,7 +289,7 @@ fn walk_files(root: &Path, policy: &Option<Policy>) -> Walk {
 }
 
 /// Checks the search root: it must exist, be readable under the policy.
-fn check_root(tool: &str, root: &Path, policy: &Option<Policy>) -> Result<(), ToolResult> {
+fn check_root(tool: &str, root: &Path, policy: &Policy) -> Result<(), ToolResult> {
     if !readable(policy, root) {
         return Err(fail(format!("{tool} denied: path is read-denied")));
     }
@@ -212,7 +315,7 @@ fn root_arg(args: &Value) -> PathBuf {
 }
 
 /// `glob`: files whose path under `path` matches `pattern`.
-pub(super) fn run_glob(args: &Value, policy: &Option<Policy>) -> ToolResult {
+fn run_glob(args: &Value, policy: &Policy) -> ToolResult {
     let Some(pattern) = str_arg(args, "pattern").filter(|p| !p.is_empty()) else {
         return fail("glob failed: missing pattern".to_string());
     };
@@ -239,20 +342,19 @@ pub(super) fn run_glob(args: &Value, policy: &Option<Policy>) -> ToolResult {
         out = "no files matched".to_string();
     }
     if total > MAX_ENTRIES {
-        out.push_str(&format!(
+        let _ = write!(
+            out,
             "\n[truncated: showing {MAX_ENTRIES} of {total} matches]"
-        ));
+        );
     }
     if walk.capped {
-        out.push_str(&format!(
-            "\n[search stopped after {MAX_FILES_VISITED} files]"
-        ));
+        let _ = write!(out, "\n[search stopped after {MAX_FILES_VISITED} files]");
     }
     ok(out)
 }
 
 /// `grep`: lines under `path` matching the regex `pattern`.
-pub(super) fn run_grep(args: &Value, policy: &Option<Policy>) -> ToolResult {
+fn run_grep(args: &Value, policy: &Policy) -> ToolResult {
     let Some(pattern) = str_arg(args, "pattern").filter(|p| !p.is_empty()) else {
         return fail("grep failed: missing pattern".to_string());
     };
@@ -296,10 +398,10 @@ pub(super) fn run_grep(args: &Value, policy: &Option<Policy>) -> ToolResult {
     let mut lines: Vec<String> = Vec::new();
     let mut total = 0usize;
     for file in files {
-        if let Some(filter) = &file_filter {
-            if !filter.is_match(&file.rel.to_string_lossy().replace('\\', "/")) {
-                continue;
-            }
+        if let Some(filter) = &file_filter
+            && !filter.is_match(&file.rel.to_string_lossy().replace('\\', "/"))
+        {
+            continue;
         }
         let Some(text) = read_text(&file.full) else {
             continue;
@@ -324,14 +426,13 @@ pub(super) fn run_grep(args: &Value, policy: &Option<Policy>) -> ToolResult {
         lines.join("\n")
     };
     if total > MAX_MATCHES {
-        out.push_str(&format!(
+        let _ = write!(
+            out,
             "\n[truncated: showing {MAX_MATCHES} of {total} matches]"
-        ));
+        );
     }
     if capped {
-        out.push_str(&format!(
-            "\n[search stopped after {MAX_FILES_VISITED} files]"
-        ));
+        let _ = write!(out, "\n[search stopped after {MAX_FILES_VISITED} files]");
     }
     ok(out)
 }
@@ -361,7 +462,7 @@ fn clip(line: &str) -> String {
 }
 
 /// `ls`: the direct entries of a directory. Directories end in `/`.
-pub(super) fn run_ls(args: &Value, policy: &Option<Policy>) -> ToolResult {
+fn run_ls(args: &Value, policy: &Policy) -> ToolResult {
     let root = root_arg(args);
     if let Err(result) = check_root("ls", &root, policy) {
         return result;
@@ -389,9 +490,10 @@ pub(super) fn run_ls(args: &Value, policy: &Option<Policy>) -> ToolResult {
         out = "(empty)".to_string();
     }
     if total > MAX_ENTRIES {
-        out.push_str(&format!(
+        let _ = write!(
+            out,
             "\n[truncated: showing {MAX_ENTRIES} of {total} entries]"
-        ));
+        );
     }
     ok(out)
 }
@@ -417,19 +519,17 @@ mod tests {
         dir
     }
 
-    fn policy(dir: &Path) -> Option<Policy> {
-        Some(
-            Policy::new(PolicyConfig {
-                cwd: dir.to_path_buf(),
-                home: dir.to_path_buf(),
-                extra_writable: vec![],
-                read_deny: vec![dir.join("secret").display().to_string()],
-                protected: vec![],
-                rules: vec![],
-                network: true,
-            })
-            .unwrap(),
-        )
+    fn policy(dir: &Path) -> Policy {
+        Policy::new(PolicyConfig {
+            cwd: dir.to_path_buf(),
+            home: dir.to_path_buf(),
+            extra_writable: vec![],
+            read_deny: vec![dir.join("secret").display().to_string()],
+            protected: vec![],
+            rules: vec![],
+            network: true,
+        })
+        .unwrap()
     }
 
     fn root(dir: &Path) -> String {
@@ -486,7 +586,7 @@ mod tests {
         }
         let r = run_glob(
             &json!({"pattern": "*.txt", "path": root(dir.path())}),
-            &None,
+            &policy(dir.path()),
         );
         assert_eq!(r.content.lines().count(), MAX_ENTRIES + 1);
         assert!(r.content.contains("[truncated: showing 1000 of 1005"));
@@ -533,7 +633,7 @@ mod tests {
         fs::write(&file, long.repeat(MAX_MATCHES + 10)).unwrap();
         let r = run_grep(
             &json!({"pattern": "x", "path": file.display().to_string()}),
-            &None,
+            &policy(dir.path()),
         );
         assert!(r.ok);
         assert_eq!(r.content.lines().count(), MAX_MATCHES + 1);
@@ -581,12 +681,12 @@ mod tests {
         std::os::unix::fs::symlink(outside.path(), dir.path().join("link")).unwrap();
         let r = run_grep(
             &json!({"pattern": "needle", "path": root(dir.path())}),
-            &None,
+            &policy(dir.path()),
         );
         assert!(!r.content.contains("needle-outside"), "{}", r.content);
         let r = run_glob(
             &json!({"pattern": "*.txt", "path": root(dir.path())}),
-            &None,
+            &policy(dir.path()),
         );
         assert!(!r.content.contains("o.txt"), "{}", r.content);
     }
