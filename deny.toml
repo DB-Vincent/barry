@@ -33,7 +33,7 @@ allow = [
 ]
 
 [sources]
-version = 2
+# This section takes no schema version: it has no versioned format.
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
