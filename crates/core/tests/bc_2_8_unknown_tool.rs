@@ -106,6 +106,7 @@ async fn bc_2_8_unknown_tool_is_ok_false_result() {
             sandbox_network: true,
             fs_read_deny: vec![],
             fs_protected: vec![],
+            rules: vec![],
             hooks: vec![],
         },
         provider.clone(),

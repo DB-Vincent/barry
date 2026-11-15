@@ -120,6 +120,7 @@ async fn bc_2_9_cancel_during_bash_kills_it() {
             sandbox_network: true,
             fs_read_deny: vec![],
             fs_protected: vec![],
+            rules: vec![],
             hooks: vec![],
         },
         provider.clone(),

@@ -22,6 +22,7 @@ fn config() -> Config {
         sandbox_network: true,
         fs_read_deny: vec![],
         fs_protected: vec![".git".to_string()],
+        rules: vec![],
         hooks: vec![],
     }
 }

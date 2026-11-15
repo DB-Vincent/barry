@@ -2,7 +2,14 @@
 //! writable root, including nested repositories, not just `cwd/.git`.
 use barry_policy::{Policy, PolicyConfig};
 use barry_testkit::Workspace;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// The policy canonicalises its writable roots, so a collected path is the
+/// canonical form. On macOS /var is a symlink to /private/var, and a
+/// comparison against the raw temporary path fails there.
+fn canon(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).expect("canonicalise")
+}
 
 fn policy(ws: &Workspace, extra: Vec<PathBuf>, protected: &[&str]) -> Policy {
     Policy::new(PolicyConfig {
@@ -27,11 +34,11 @@ fn nested_repositories_are_protected() {
     let paths = policy.protected_paths();
 
     assert!(
-        paths.contains(&ws.cwd().join(".git")),
+        paths.contains(&canon(&ws.cwd().join(".git"))),
         "the top-level .git must stay protected"
     );
     assert!(
-        paths.contains(&nested),
+        paths.contains(&canon(&nested)),
         "a submodule/vendored .git must be protected too: {paths:?}"
     );
 }
@@ -45,7 +52,9 @@ fn extra_writable_roots_are_protected() {
 
     let policy = policy(&ws, vec![extra.clone()], &[".env"]);
     assert!(
-        policy.protected_paths().contains(&extra.join(".env")),
+        policy
+            .protected_paths()
+            .contains(&canon(&extra.join(".env"))),
         "protected names must be found under extra writable roots"
     );
 }
@@ -59,7 +68,7 @@ fn protected_names_match_any_depth() {
 
     let policy = policy(&ws, vec![], &[".envrc"]);
     assert!(
-        policy.protected_paths().contains(&deep),
+        policy.protected_paths().contains(&canon(&deep)),
         "a protected name below the root must be protected"
     );
 }
@@ -74,9 +83,9 @@ fn protected_directories_are_not_descended_into() {
 
     let policy = policy(&ws, vec![], &[".git"]);
     let paths = policy.protected_paths();
-    assert!(paths.contains(&ws.cwd().join(".git")));
+    assert!(paths.contains(&canon(&ws.cwd().join(".git"))));
     assert!(
-        !paths.contains(&inner),
+        !paths.contains(&canon(&inner)),
         "the walk must stop at a protected directory"
     );
 }

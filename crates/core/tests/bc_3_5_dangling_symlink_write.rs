@@ -108,6 +108,7 @@ async fn bc_3_5_dangling_symlink_write_does_not_escape_cwd() {
             sandbox_network: true,
             fs_read_deny: vec![],
             fs_protected: vec![],
+            rules: vec![],
             hooks: vec![],
         },
         provider.clone(),

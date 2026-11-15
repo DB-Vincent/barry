@@ -74,6 +74,7 @@ async fn bc_6_7_compact_forces_compaction() {
         sandbox_network: true,
         fs_read_deny: vec![],
         fs_protected: vec![],
+        rules: vec![],
         hooks: vec![],
     };
 
@@ -114,6 +115,7 @@ async fn bc_6_7_compact_nothing_to_compact() {
         sandbox_network: true,
         fs_read_deny: vec![],
         fs_protected: vec![],
+        rules: vec![],
         hooks: vec![],
     };
     let mut agent = Agent::new(

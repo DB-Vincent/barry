@@ -173,7 +173,7 @@ pub(crate) async fn run(
         extra_writable: vec![],
         read_deny: cfg.fs_read_deny.clone(),
         protected: cfg.fs_protected.clone(),
-        rules: vec![],
+        rules: cfg.rules.clone(),
         network: cfg.sandbox_network,
     })
     .expect("policy constructs");
