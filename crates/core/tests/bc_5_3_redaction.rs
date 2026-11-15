@@ -1,3 +1,9 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(
+    unsafe_code,
+    reason = "Rust 2024 makes env::set_var unsafe; the tests that use it do not share the variable across threads"
+)]
+
 use barry_core::Agent;
 /// BC-5.3 When a tool reads a file containing `sk-` followed by 30 chars, or
 /// `FAKE` env secret values, the log shows `[REDACTED]`, never the secret.
@@ -21,8 +27,11 @@ fn config() -> Config {
         max_turns: 10,
         context_window: 32_768,
         sandbox_network: true,
+        sandbox_unsandboxed: false,
+        redact_tool_output: false,
         fs_read_deny: vec![],
         fs_protected: vec![],
+        rules: vec![],
         hooks: vec![],
     }
 }
@@ -43,7 +52,6 @@ fn policy(ws: &Workspace) -> Policy {
 #[tokio::test]
 async fn bc_5_3_secrets_are_redacted_in_the_log_only() {
     // The redactor snapshots secret env values when the log is created.
-    // SAFETY: test-only; no other thread reads or writes the environment here.
     unsafe {
         std::env::set_var("BARRY_TEST_SECRET_TOKEN", ENV_SECRET);
     }
@@ -70,7 +78,7 @@ async fn bc_5_3_secrets_are_redacted_in_the_log_only() {
         config(),
         provider.clone(),
         Arc::new(ScriptedApprover::none()),
-        Some(policy(&ws)),
+        policy(&ws),
     )
     .expect("agent constructs")
     .with_session_log(log);
@@ -81,7 +89,6 @@ async fn bc_5_3_secrets_are_redacted_in_the_log_only() {
         .await
         .expect("turn completes");
 
-    // SAFETY: test-only; no other thread reads or writes the environment here.
     unsafe {
         std::env::remove_var("BARRY_TEST_SECRET_TOKEN");
     }
@@ -166,7 +173,7 @@ async fn bc_5_3_tool_decision_input_is_redacted() {
         config(),
         provider,
         Arc::new(ScriptedApprover::none()),
-        Some(policy(&ws)),
+        policy(&ws),
     )
     .expect("agent constructs")
     .with_session_log(log);

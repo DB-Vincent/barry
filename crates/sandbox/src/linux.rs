@@ -9,9 +9,11 @@
 //!         --bind <root> <root>           (each writable root)
 //!         --ro-bind <p> <p>              (each protected_ro path that exists)
 //!         --bind <grant> <grant>         (each explicit grant)
-//!         --tmpfs <dir>                  (each read-deny directory that exists)
+//!         --tmpfs <dir>                  (each read-deny directory that exists,
+//!                                         or is missing under a writable root)
 //!         --ro-bind /dev/null <file>     (each read-deny file that exists)
-//!         --unshare-user [--unshare-net if !network]
+//!         --unshare-user --unshare-pid --unshare-ipc --cap-drop ALL
+//!         [--unshare-net if !network]
 //!         --die-with-parent --new-session --chdir <cwd>
 //!         -- <barry_exe> __sandbox-exec -- /bin/sh -c <cmd>
 
@@ -66,8 +68,14 @@ pub(crate) fn command(
 
     // Read-deny directories masked with tmpfs; read-deny files masked with /dev/null.
     // Applied last so a grant cannot accidentally expose a read-denied path.
+    //
+    // A path that does not exist yet cannot be masked unless bwrap can create
+    // the mountpoint. It can only do that inside a writable mount; masking
+    // elsewhere would make bwrap fail (the rest of `/` is read-only). Missing
+    // entries under a writable root are masked as directories: the sandbox
+    // cannot then create anything readable at that name.
     for d in &spec.read_deny {
-        if d.exists() && d.is_dir() {
+        if d.is_dir() || (!d.exists() && mountpoint_creatable(spec, d)) {
             cmd.arg("--tmpfs").arg(d);
         }
     }
@@ -82,6 +90,14 @@ pub(crate) fn command(
     if !spec.network {
         cmd.arg("--unshare-net");
     }
+
+    // Separate PID and IPC namespaces so the command can neither see nor signal
+    // processes outside the sandbox, nor reach host shared memory and
+    // semaphores. Capabilities are dropped entirely: nothing inside needs one.
+    cmd.arg("--unshare-pid")
+        .arg("--unshare-ipc")
+        .arg("--cap-drop")
+        .arg("ALL");
 
     cmd.arg("--die-with-parent")
         .arg("--new-session")
@@ -112,15 +128,22 @@ pub(crate) fn command(
 ///
 /// In a normal run this is the running binary. Test binaries are launched from
 /// `target/<profile>/deps/<test>` or, depending on the cargo layout,
-/// `target/<profile>/build/<crate>/<hash>/out/<test>`, so walk up the
-/// ancestors and take the first `barry` executable found next to one of them.
-/// `BARRY_BIN_OVERRIDE` is an explicit escape hatch (tests, unusual installs).
-/// Fails closed rather than running a non-barry binary as the helper.
+/// `target/<profile>/build/<crate>/<hash>/out/<test>`, so in debug builds we
+/// walk up the ancestors and take the first `barry` executable found next to
+/// one of them (#15).
+///
+/// Neither that ancestor walk nor `BARRY_BIN_OVERRIDE` applies to a release
+/// build: the helper runs inside the sandbox with the user's privileges, so a
+/// release binary must not be redirectable to an arbitrary executable by a
+/// file sitting nearby or by an environment variable.
 fn helper_exe() -> Result<PathBuf, SandboxError> {
-    if let Ok(path) = std::env::var("BARRY_BIN_OVERRIDE") {
-        if !path.is_empty() {
-            return Ok(PathBuf::from(path));
-        }
+    let override_path = if cfg!(debug_assertions) {
+        std::env::var("BARRY_BIN_OVERRIDE").ok()
+    } else {
+        None
+    };
+    if let Some(path) = override_path.filter(|p| !p.is_empty()) {
+        return Ok(PathBuf::from(path));
     }
 
     let exe = std::env::current_exe()
@@ -129,15 +152,18 @@ fn helper_exe() -> Result<PathBuf, SandboxError> {
         return Ok(exe);
     }
 
-    for ancestor in exe.ancestors().skip(1) {
-        let candidate = ancestor.join("barry");
-        if candidate.is_file() {
-            return Ok(candidate);
+    if cfg!(debug_assertions) {
+        for ancestor in exe.ancestors().skip(1) {
+            let candidate = ancestor.join("barry");
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
         }
     }
 
     Err(SandboxError::Other(format!(
-        "cannot find the barry helper binary (looked next to {exe:?}); set BARRY_BIN_OVERRIDE"
+        "cannot find the barry helper binary (looked next to {})",
+        exe.display()
     )))
 }
 
@@ -164,6 +190,22 @@ fn build_sandbox_env(shell_command: &str) -> String {
 /// adding an escaped quote, and starting a new quote.
 fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// Whether bwrap can create a mountpoint at `path`: its parent must exist and
+/// be writable inside the sandbox, i.e. covered by a writable root or a grant.
+/// Elsewhere bwrap refuses ("Read-only file system") and the command fails.
+fn mountpoint_creatable(spec: &crate::SandboxSpec, path: &std::path::Path) -> bool {
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    if !parent.is_dir() {
+        return false;
+    }
+    spec.writable_roots
+        .iter()
+        .chain(spec.grants.iter())
+        .any(|root| parent.starts_with(root))
 }
 
 /// Locate `bwrap` on `PATH`. Fail closed if not found.
@@ -202,13 +244,9 @@ pub(crate) fn run_helper_if_invoked() {
     }
 }
 
-/// Install a seccomp filter that EPERMs dangerous syscalls.
-///
-/// bwrap already sets `no_new_privs`, which is required for seccomp without
-/// `CAP_SYS_ADMIN`.
-fn install_seccomp_filter() -> Result<(), String> {
-    let mut rules: BTreeMap<i64, Vec<seccompiler::SeccompRule>> = BTreeMap::new();
-    for &syscall in &[
+/// Syscalls the filter always denies, whatever their arguments.
+fn denied_syscalls() -> Vec<i64> {
+    vec![
         libc::SYS_ptrace,
         libc::SYS_process_vm_readv,
         libc::SYS_process_vm_writev,
@@ -224,9 +262,66 @@ fn install_seccomp_filter() -> Result<(), String> {
         libc::SYS_io_uring_register,
         libc::SYS_perf_event_open,
         libc::SYS_kexec_load,
-    ] {
+        // Namespace and process-control escape hatches (#15): `unshare` and
+        // `setns` only move between namespaces, and nothing legitimate inside
+        // the sandbox needs to. `userfaultfd` and `personality` are common
+        // kernel-exploit primitives.
+        libc::SYS_unshare,
+        libc::SYS_setns,
+        libc::SYS_userfaultfd,
+        libc::SYS_personality,
+    ]
+}
+
+/// `clone` rules that deny the call when its flags ask for a new namespace.
+///
+/// A plain denylist entry for `clone` would break every thread and process the
+/// sandbox creates, so the filter looks at the flags argument (index 0) and
+/// only rejects the namespace bits, one rule per bit.
+///
+/// `clone3` takes its flags behind a pointer and cannot be filtered this way;
+/// it is left alone deliberately, because denying it outright (rather than
+/// returning ENOSYS) breaks threading for the tools running inside.
+fn namespace_clone_rules() -> Result<Vec<seccompiler::SeccompRule>, String> {
+    use seccompiler::{SeccompCmpArgLen, SeccompCmpOp, SeccompCondition, SeccompRule};
+
+    let flags = [
+        libc::CLONE_NEWUSER,
+        libc::CLONE_NEWPID,
+        libc::CLONE_NEWNET,
+        libc::CLONE_NEWNS,
+        libc::CLONE_NEWIPC,
+        libc::CLONE_NEWUTS,
+        libc::CLONE_NEWCGROUP,
+    ];
+
+    flags
+        .into_iter()
+        .map(|flag| {
+            let flag = flag as u64;
+            let condition = SeccompCondition::new(
+                0,
+                SeccompCmpArgLen::Dword,
+                SeccompCmpOp::MaskedEq(flag),
+                flag,
+            )
+            .map_err(|e| format!("failed to build clone condition: {e}"))?;
+            SeccompRule::new(vec![condition])
+                .map_err(|e| format!("failed to build clone rule: {e}"))
+        })
+        .collect()
+}
+
+/// Install a seccomp filter that EPERMs dangerous syscalls.
+///
+/// bwrap already sets `no_new_privs`, which is required for seccomp without
+/// `CAP_SYS_ADMIN`.
+fn install_seccomp_filter() -> Result<(), String> {
+    let mut rules: BTreeMap<i64, Vec<seccompiler::SeccompRule>> = BTreeMap::new();
+    for syscall in denied_syscalls() {
         rules.insert(syscall, vec![]);
     }
+    rules.insert(libc::SYS_clone, namespace_clone_rules()?);
 
     let filter = seccompiler::SeccompFilter::new(
         rules,

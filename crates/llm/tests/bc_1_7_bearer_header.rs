@@ -1,3 +1,9 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(
+    unsafe_code,
+    reason = "Rust 2024 makes env::set_var unsafe; the tests that use it do not share the variable across threads"
+)]
+
 /// BC-1.7 When `api_key_env` is set, the request carries
 /// `Authorization: Bearer <key>`. When unset, no Authorization header.
 use barry_llm::{Compat, LlmError, LlmEvent, LlmRequest, OpenAiProvider, Provider};

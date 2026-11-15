@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use barry_core::Agent;
 /// BC-3.4 A grant does not carry over to a new session.
 ///
@@ -105,13 +107,16 @@ async fn bc_3_4_grant_does_not_carry_to_new_session() {
             max_turns: 10,
             context_window: 32_768,
             sandbox_network: true,
+            sandbox_unsandboxed: false,
+            redact_tool_output: false,
             fs_read_deny: vec![],
             fs_protected: vec![],
+            rules: vec![],
             hooks: vec![],
         },
         provider1.clone(),
         approver1,
-        Some(policy1),
+        policy1,
     )
     .expect("agent constructs");
 
@@ -150,13 +155,16 @@ async fn bc_3_4_grant_does_not_carry_to_new_session() {
             max_turns: 10,
             context_window: 32_768,
             sandbox_network: true,
+            sandbox_unsandboxed: false,
+            redact_tool_output: false,
             fs_read_deny: vec![],
             fs_protected: vec![],
+            rules: vec![],
             hooks: vec![],
         },
         provider2.clone(),
         approver2,
-        Some(policy2),
+        policy2,
     )
     .expect("agent constructs");
 

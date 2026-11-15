@@ -1,3 +1,9 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(
+    unsafe_code,
+    reason = "Rust 2024 makes env::set_var unsafe; the tests that use it do not share the variable across threads"
+)]
+
 /// BC-1.6 A 429 followed by a success completes normally. A 401 gives an
 /// auth error naming the provider, and the error text does not contain the
 /// API key.

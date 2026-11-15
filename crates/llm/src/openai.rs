@@ -48,6 +48,10 @@ impl OpenAiProvider {
         max_output_tokens: u64,
         compat: Compat,
     ) -> Self {
+        #[allow(
+            clippy::expect_used,
+            reason = "builder only fails on TLS backend init, a startup invariant"
+        )]
         let client = Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
             .build()

@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-2.1 Given the model calls `read` on `README.md`,
 /// when the agent runs the turn, then the model receives the file
 /// contents with line numbers and the user sees the final answer.
@@ -116,13 +118,16 @@ async fn bc_2_1_read_tool_returns_numbered_contents() {
             max_turns: 10,
             context_window: 32_768,
             sandbox_network: true,
+            sandbox_unsandboxed: true,
+            redact_tool_output: false,
             fs_read_deny: vec![],
             fs_protected: vec![],
+            rules: vec![],
             hooks: vec![],
         },
         provider.clone(),
         approver,
-        None,
+        permissive_policy(),
     )
     .expect("agent should construct");
 
@@ -181,4 +186,20 @@ async fn bc_2_1_read_tool_returns_numbered_contents() {
         "expected at least two LLM requests, got {}",
         calls.len()
     );
+}
+
+/// A policy with no rules and no read-deny, for tests that cover the turn loop
+/// and the tool plumbing rather than the policy engine (#30). It pre-approves
+/// nothing: a write outside its own cwd goes to the test approver.
+fn permissive_policy() -> barry_policy::Policy {
+    barry_policy::Policy::new(barry_policy::PolicyConfig {
+        cwd: std::env::temp_dir().join("barry-test-policy-cwd"),
+        home: std::env::temp_dir().join("barry-test-policy-home"),
+        extra_writable: vec![],
+        read_deny: vec![],
+        protected: vec![],
+        rules: vec![],
+        network: true,
+    })
+    .expect("policy constructs")
 }

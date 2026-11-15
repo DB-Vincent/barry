@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-1.1 Given a streamed text reply,
 /// when the provider receives it, then it arrives as ≥2 TextDeltas
 /// and the final message equals their concatenation.
