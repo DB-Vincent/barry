@@ -1,5 +1,6 @@
 //! BC-5.4 Log files have mode 0600 and their directory 0700.
 #![cfg(unix)]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use barry_core::session::SessionLog;
 use std::os::unix::fs::PermissionsExt;

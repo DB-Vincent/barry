@@ -1,8 +1,6 @@
 //! LLM client for barry.
 //! Provider trait and shared request/event types.
 
-#![forbid(unsafe_code)]
-
 use barry_protocol::{Message, StopReason, ToolSpec, Usage};
 use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
@@ -52,7 +50,7 @@ pub trait Provider: Send + Sync {
 /// Provider quirks that differ between OpenAI-compatible servers.
 #[derive(Debug, Clone, Default)]
 pub struct Compat {
-    /// The field name used for reasoning deltas: "reasoning_content" | "reasoning"
+    /// The field name used for reasoning deltas: `"reasoning_content"` or `"reasoning"`
     pub reasoning_field: Option<String>,
     /// Whether the provider supports parallel tool calls
     pub supports_parallel_tool_calls: bool,
