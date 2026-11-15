@@ -56,15 +56,14 @@ pub(crate) fn neutralize(text: &str) -> String {
     let close = format!("</{UNTRUSTED_TAG}");
     let mut out = String::with_capacity(text.len());
     let mut i = 0;
-    while i < text.len() {
+    // `i` always sits on a char boundary: ASCII lowercasing keeps byte
+    // lengths, and we advance by whole chars.
+    while let Some(ch) = text[i..].chars().next() {
         let rest = &lower[i..];
         if rest.starts_with(&open) || rest.starts_with(&close) {
             out.push_str("&lt;");
             i += 1;
         } else {
-            // `i` always sits on a char boundary: ASCII lowercasing keeps
-            // byte lengths, and we advance by whole chars.
-            let ch = text[i..].chars().next().expect("in bounds");
             out.push(ch);
             i += ch.len_utf8();
         }
