@@ -1,6 +1,13 @@
 //! Issue #16: a read-deny path that does not exist when the session starts is
 //! still masked. Bash writes into the tmpfs mask instead of the real directory,
 //! so nothing appears on the host.
+//!
+//! This is a Linux guarantee: bubblewrap mounts a tmpfs over the missing path.
+//! Seatbelt resolves path filters when the profile is compiled, so a path that
+//! does not exist yet cannot be denied there, and macOS protects an existing
+//! read-deny entry instead.
+#![cfg(target_os = "linux")]
+
 use barry_core::config::Config;
 use barry_core::Agent;
 use barry_policy::{Policy, PolicyConfig};

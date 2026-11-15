@@ -59,11 +59,12 @@ pub(crate) fn command(
         }
     }
 
-    // Read-deny paths. No existence check: Seatbelt denies the path, so a
-    // read-denied path created after the session started is denied too (#16).
-    // Writes are denied as well: a read-deny entry names a secret, and on Linux
-    // the same write disappears into the tmpfs mask instead of reaching the
-    // host, so denying it keeps the two platforms consistent.
+    // Read-deny paths. Seatbelt resolves a path filter when the profile is
+    // compiled, so a read-deny entry that does not exist yet matches nothing
+    // here; on Linux the same path is masked by a tmpfs mount, which is what
+    // makes a directory created later stay inside the sandbox (#16). Writes
+    // are denied too, so an entry that does exist is neither readable nor
+    // writable from a sandboxed command.
     for i in 0..spec.read_deny.len() {
         profile.push_str(&format!(
             "(deny file-read* (subpath (param \"DENY_READ_{0}\")))\n\
