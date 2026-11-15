@@ -20,9 +20,10 @@ pub struct PromptContext<'a> {
 }
 
 /// Render the approved PLAN 5.2 template.
+#[must_use]
 pub fn system_prompt(ctx: &PromptContext<'_>) -> String {
     let prompt = format!(
-        r#"You are barry, a coding agent working in the user's terminal.
+        r"You are barry, a coding agent working in the user's terminal.
 Working directory: {cwd}. OS: {os}. Date: {date}.
 
 - Inspect before you change: read files and search with `rg`/`fd` via bash.
@@ -33,7 +34,7 @@ Working directory: {cwd}. OS: {os}. Date: {date}.
 - Finish with a short summary of what you changed and how you verified it.
 
 {agents_md_section}
-{skills_section}"#,
+{skills_section}",
         cwd = ctx.cwd.display(),
         os = ctx.os,
         date = ctx.date,
@@ -46,6 +47,7 @@ Working directory: {cwd}. OS: {os}. Date: {date}.
 }
 
 /// Today's UTC date as `YYYY-MM-DD`.
+#[must_use]
 pub fn today() -> String {
     time::OffsetDateTime::now_utc()
         .date()

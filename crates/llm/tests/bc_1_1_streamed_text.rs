@@ -1,5 +1,7 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-1.1 Given a streamed text reply,
-/// when the provider receives it, then it arrives as ≥2 TextDeltas
+/// when the provider receives it, then it arrives as ≥2 `TextDeltas`
 /// and the final message equals their concatenation.
 use barry_llm::{Compat, LlmEvent, LlmRequest, OpenAiProvider, Provider};
 use barry_protocol::Message;
@@ -51,8 +53,7 @@ async fn bc_1_1_streamed_text_concatenates() {
 
     assert!(
         delta_count >= 2,
-        "expected at least 2 TextDeltas, got {}",
-        delta_count
+        "expected at least 2 TextDeltas, got {delta_count}"
     );
 
     let Message::Assistant { content, .. } = final_message.unwrap() else {

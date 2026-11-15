@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-4.4 `env` run in bash shows no variable from the test environment named
 /// `OPENAI_API_KEY` or `TEST_SECRET_TOKEN`.
 use barry_testkit::{FakeLlm, Reply};
