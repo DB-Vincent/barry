@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// Budgets: a run that exceeds a configured limit stops with a distinct
 /// `StopReason::BudgetExceeded`, tells the user why, and does not run further
 /// tool calls.
@@ -64,6 +66,19 @@ impl Approver for AllowAll {
     }
 }
 
+fn policy() -> barry_policy::Policy {
+    barry_policy::Policy::new(barry_policy::PolicyConfig {
+        cwd: std::env::temp_dir(),
+        home: std::env::temp_dir().join("barry-test-policy-home"),
+        extra_writable: vec![],
+        read_deny: vec![],
+        protected: vec![],
+        rules: vec![],
+        network: true,
+    })
+    .expect("policy constructs")
+}
+
 fn agent(provider: Arc<ToolProvider>, budgets: Budgets) -> Agent {
     Agent::new(
         Config {
@@ -71,14 +86,17 @@ fn agent(provider: Arc<ToolProvider>, budgets: Budgets) -> Agent {
             max_turns: 20,
             context_window: 1_000_000,
             sandbox_network: true,
+            sandbox_unsandboxed: true,
+            redact_tool_output: false,
             fs_read_deny: vec![],
             fs_protected: vec![],
+            rules: vec![],
             hooks: vec![],
             budgets,
         },
         provider,
         Arc::new(AllowAll),
-        None,
+        policy(),
     )
     .expect("agent constructs")
 }
@@ -248,7 +266,7 @@ fn a_cost_limit_without_prices_is_rejected_at_construction() {
         },
         ToolProvider::new("true", None),
         Arc::new(AllowAll),
-        None,
+        policy(),
     );
     assert!(result.is_err());
 }

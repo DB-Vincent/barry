@@ -1,7 +1,9 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
+use barry_core::Agent;
 /// BC-4.5 Writing `.git/config` from bash fails inside the sandbox unless
 /// `.git` has been granted.
 use barry_core::config::Config;
-use barry_core::Agent;
 use barry_policy::{Policy, PolicyConfig};
 use barry_protocol::{ApprovalChoice, StopReason};
 use barry_testkit::scripted::Reply;
@@ -17,10 +19,13 @@ fn config() -> Config {
         max_turns: 10,
         context_window: 32_768,
         sandbox_network: true,
+        sandbox_unsandboxed: false,
+        redact_tool_output: false,
         fs_read_deny: vec![],
         fs_protected: vec![".git".to_string()],
+        rules: vec![],
         hooks: vec![],
-        budgets: Default::default(),
+        budgets: barry_core::budget::Budgets::default(),
     }
 }
 
@@ -51,8 +56,8 @@ async fn run(ws: &Workspace, approver: Arc<ScriptedApprover>) -> String {
             content: "done".to_string(),
         },
     ]));
-    let mut agent = Agent::new(config(), provider.clone(), approver, Some(policy(ws)))
-        .expect("agent constructs");
+    let mut agent =
+        Agent::new(config(), provider.clone(), approver, policy(ws)).expect("agent constructs");
     let (tx, _rx) = mpsc::channel(32);
     let stop = agent
         .run_turn("write .git/config", tx, CancellationToken::new())

@@ -1,8 +1,10 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
+use barry_core::Agent;
 /// BC-3.7 Reading `~/.ssh/id_test` is refused without a prompt, and the
 /// model never receives `FAKE-PRIVATE-KEY`. Reading a normal file outside
 /// cwd is allowed.
 use barry_core::config::Config;
-use barry_core::Agent;
 use barry_llm::{LlmEvent, LlmRequest};
 use barry_policy::{Policy, PolicyConfig};
 use barry_protocol::{Message, StopReason};
@@ -117,14 +119,17 @@ async fn bc_3_7_read_deny_blocks_secret_and_allows_normal_outside_read() {
             max_turns: 10,
             context_window: 32_768,
             sandbox_network: true,
+            sandbox_unsandboxed: false,
+            redact_tool_output: false,
             fs_read_deny: vec![],
             fs_protected: vec![],
+            rules: vec![],
             hooks: vec![],
-            budgets: Default::default(),
+            budgets: barry_core::budget::Budgets::default(),
         },
         provider.clone(),
         no_approver,
-        Some(policy),
+        policy,
     )
     .expect("agent constructs");
 
@@ -175,14 +180,17 @@ async fn bc_3_7_read_deny_blocks_secret_and_allows_normal_outside_read() {
             max_turns: 10,
             context_window: 32_768,
             sandbox_network: true,
+            sandbox_unsandboxed: false,
+            redact_tool_output: false,
             fs_read_deny: vec![],
             fs_protected: vec![],
+            rules: vec![],
             hooks: vec![],
-            budgets: Default::default(),
+            budgets: barry_core::budget::Budgets::default(),
         },
         provider2.clone(),
         no_approver2.clone(),
-        Some(policy2),
+        policy2,
     )
     .expect("agent constructs");
 

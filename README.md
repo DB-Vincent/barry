@@ -82,15 +82,21 @@ Running `barry` with no `-p` starts a minimal line REPL in the current working d
 
 ## Configuration
 
-User config is read from the file named by `$BARRY_CONFIG`; if the variable is unset or the file does not exist, built-in defaults apply. Supported keys today:
+User config is read from the file named by `$BARRY_CONFIG`; when that variable is unset, `$XDG_CONFIG_HOME/barry/config.toml` (or `~/.config/barry/config.toml`) is used. If no file exists, built-in defaults apply. `barry config show` prints the configuration in effect and the file it came from. Supported keys today:
 
 ```toml
 [sandbox]
-network = true   # false: sandboxed commands cannot use the network
+network = false     # default; true lets sandboxed commands use the network
+unsandboxed = false # default; true runs bash without the OS sandbox (logged,
+                    # and not recommended: rules and approvals still apply)
 
 [fs]
-read_deny = []   # paths the model may not read, through the read tool or bash
-protected = []   # path components that always require approval to write
+# defaults shown; [] opts out of the credential paths
+read_deny = ["~/.ssh", "~/.aws", "~/.config/gcloud", "~/.kube", "~/.docker", "~/.gnupg"]
+protected = [".git", ".barry", ".env"]
+
+[redaction]
+tool_output = true  # default false; mask secrets in tool output sent to the model
 ```
 
 Budgets limit one run (one prompt) and are off by default. The flags above override the config file:
@@ -122,7 +128,7 @@ File writes stay inside the current directory unless you grant a path. Configure
 
 Every session appends to `~/.local/state/barry/sessions/` (or `$XDG_STATE_HOME/barry/sessions`) as JSONL. Each line carries the SHA-256 of the previous line and a hash of itself, so `barry log verify` can name the first edited line. Lines are `0600` in a `0700` directory, and one writer at a time is enforced with an advisory lock. Entries cover the session start (cwd, model, version, policy fingerprint), conversation messages, tool decisions (with the deciding rule id, user or default), tool results, grants, approved bash prefixes and notices. Decisions are written before the tool runs, so a crash cannot lose the audit trail.
 
-Secrets are redacted before an entry is hashed: built-in patterns (`sk-…`, GitHub tokens, AWS keys, JWTs, private keys) and the values of environment variables whose names contain `KEY`, `TOKEN`, `SECRET` or `PASSWORD`. Redaction applies only to the log; the model still sees real tool output. `barry --resume` verifies the chain before appending and refuses a broken log. The chain detects edits and middle deletions, but not truncation: deleting trailing entries (or the whole file) leaves a shorter chain that still verifies. Anchor the head hash elsewhere if you need to detect truncation.
+Secrets are redacted before an entry is hashed: built-in patterns (`sk-…`, GitHub tokens, AWS keys, JWTs, private keys) and the values of environment variables whose names contain `KEY`, `TOKEN`, `SECRET` or `PASSWORD`. Redaction applies to the log always; the model sees real tool output unless `redaction.tool_output = true` is set, which masks the same secrets in tool results before they are sent to the provider. `barry --resume` verifies the chain before appending and refuses a broken log. The chain detects edits and middle deletions, but not truncation: deleting trailing entries (or the whole file) leaves a shorter chain that still verifies. Anchor the head hash elsewhere if you need to detect truncation.
 
 ## Business cases and testing
 
@@ -155,8 +161,8 @@ Implemented so far:
 
 - `barry --version` — prints `barry <semver>` and exits 0
 - `barry rules check "<command>"` — prints the policy decision and the deciding rule id
-- Config loading from `$BARRY_CONFIG` with clean error messages (exit 2 on malformed config, no backtrace)
-- Streaming OpenAI-compatible client and the agent loop with `read`, `write`, `edit`, `bash` and the `agent` placeholder (the placeholder refuses clearly; sub-agents are M8)
+- `barry config show` — prints the effective config (path defaults, network, redaction, rules, hooks) and the file it came from
+- Streaming OpenAI-compatible client and the agent loop with `read`, `write`, `edit` and `bash` (sub-agents, and their tool, arrive in M8)
 - Interactive REPL with streaming output, tool lines, stdin approvals, `/exit`, `/grants`, `/model` and Ctrl-C cancellation (`/compact` is a stub until M6)
 - Headless `-p` mode with `--json`, wrapped tool results and the PLAN 5.2 system prompt
 - Policy approvals with session grants, and the Linux/macOS OS sandbox
@@ -166,8 +172,8 @@ Implemented so far:
 Not implemented yet:
 
 - Context compaction, AGENTS.md/skills, hooks, project trust and sub-agents
-- Model profiles and the rest of the config schema: only `sandbox.network`, `fs.read_deny` and `fs.protected` are read today
-- Built-in path defaults: with no `fs.read_deny` / `fs.protected` entries, no credential path is read-denied and no path component is protected
+- Model profiles and the rest of the config schema: only `sandbox.network`, `fs.read_deny`, `fs.protected` and `redaction.tool_output` are read today
+- Globs in `fs.read_deny`: entries are paths, matched by prefix, so a `.env*` pattern does not match anything; `.env` is covered by `fs.protected` instead
 
 ## Development
 

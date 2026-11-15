@@ -1,8 +1,10 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
+use barry_core::Agent;
 /// BC-5.5 After `--resume`, the first request to the model contains the
 /// earlier conversation.
 use barry_core::config::Config;
 use barry_core::session::{EntryKind, SessionLog};
-use barry_core::Agent;
 use barry_policy::{Policy, PolicyConfig};
 use barry_protocol::Message;
 use barry_testkit::scripted::Reply;
@@ -17,10 +19,13 @@ fn config() -> Config {
         max_turns: 10,
         context_window: 32_768,
         sandbox_network: true,
+        sandbox_unsandboxed: false,
+        redact_tool_output: false,
         fs_read_deny: vec![],
         fs_protected: vec![],
+        rules: vec![],
         hooks: vec![],
-        budgets: Default::default(),
+        budgets: barry_core::budget::Budgets::default(),
     }
 }
 
@@ -52,7 +57,7 @@ async fn bc_5_5_resume_sends_earlier_conversation() {
         config(),
         first_provider,
         Arc::new(ScriptedApprover::none()),
-        Some(policy(&ws)),
+        policy(&ws),
     )
     .expect("agent constructs")
     .with_session_log(log);
@@ -72,7 +77,7 @@ async fn bc_5_5_resume_sends_earlier_conversation() {
         config(),
         second_provider.clone(),
         Arc::new(ScriptedApprover::none()),
-        Some(policy(&ws)),
+        policy(&ws),
         &log_path,
     )
     .expect("resume constructs");
@@ -136,7 +141,7 @@ async fn bc_5_5_resume_refuses_a_broken_log() {
         config(),
         Arc::new(ScriptedProvider::new(vec![])),
         Arc::new(ScriptedApprover::none()),
-        Some(policy(&ws)),
+        policy(&ws),
         &log_path,
     )
     .err()

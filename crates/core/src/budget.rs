@@ -30,16 +30,20 @@ pub struct Budgets {
 impl Budgets {
     /// Reject settings that cannot be enforced. A cost limit without prices
     /// would silently never trigger, so it is an error instead.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message naming the setting that cannot be enforced.
     pub fn validate(&self) -> Result<(), String> {
         for (name, value) in [
             ("max_cost_usd", self.max_cost_usd),
             ("price_input_per_mtok", self.price_input_per_mtok),
             ("price_output_per_mtok", self.price_output_per_mtok),
         ] {
-            if let Some(v) = value {
-                if !v.is_finite() || v < 0.0 {
-                    return Err(format!("budgets.{name} must be a non-negative number"));
-                }
+            if let Some(v) = value
+                && (!v.is_finite() || v < 0.0)
+            {
+                return Err(format!("budgets.{name} must be a non-negative number"));
             }
         }
         if self.max_cost_usd.is_some()
@@ -94,6 +98,10 @@ impl BudgetTracker {
         self.usage.clone()
     }
 
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "token counts stay far below 2^52, so the f64 estimate is exact"
+    )]
     fn cost_usd(&self) -> Option<f64> {
         let input = self.budgets.price_input_per_mtok?;
         let output = self.budgets.price_output_per_mtok?;
@@ -110,21 +118,21 @@ impl BudgetTracker {
             .usage
             .input_tokens
             .saturating_add(self.usage.output_tokens);
-        if let Some(max) = b.max_total_tokens {
-            if total > max {
-                return Some(Exceeded {
-                    kind: BudgetKind::Tokens,
-                    message: format!("token budget exceeded: used {total} of {max}"),
-                });
-            }
+        if let Some(max) = b.max_total_tokens
+            && total > max
+        {
+            return Some(Exceeded {
+                kind: BudgetKind::Tokens,
+                message: format!("token budget exceeded: used {total} of {max}"),
+            });
         }
-        if let (Some(max), Some(cost)) = (b.max_cost_usd, self.cost_usd()) {
-            if cost > max {
-                return Some(Exceeded {
-                    kind: BudgetKind::Cost,
-                    message: format!("cost budget exceeded: ${cost:.4} of ${max:.4}"),
-                });
-            }
+        if let (Some(max), Some(cost)) = (b.max_cost_usd, self.cost_usd())
+            && cost > max
+        {
+            return Some(Exceeded {
+                kind: BudgetKind::Cost,
+                message: format!("cost budget exceeded: ${cost:.4} of ${max:.4}"),
+            });
         }
         if let Some(max) = b.max_wall_secs {
             let elapsed = self.start.elapsed();
@@ -138,16 +146,16 @@ impl BudgetTracker {
                 });
             }
         }
-        if let Some(max) = b.max_bash_secs {
-            if self.bash > Duration::from_secs(max) {
-                return Some(Exceeded {
-                    kind: BudgetKind::BashTime,
-                    message: format!(
-                        "bash-time budget exceeded: {}s of {max}s",
-                        self.bash.as_secs()
-                    ),
-                });
-            }
+        if let Some(max) = b.max_bash_secs
+            && self.bash > Duration::from_secs(max)
+        {
+            return Some(Exceeded {
+                kind: BudgetKind::BashTime,
+                message: format!(
+                    "bash-time budget exceeded: {}s of {max}s",
+                    self.bash.as_secs()
+                ),
+            });
         }
         None
     }

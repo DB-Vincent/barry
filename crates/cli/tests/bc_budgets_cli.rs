@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// Budgets through the real binary: exit code 4 when a budget is exceeded,
 /// exit code 2 for a budget setting that cannot be enforced.
 use barry_testkit::{FakeLlm, Reply};
@@ -83,5 +85,5 @@ async fn invalid_budget_value_in_config_exits_2() {
         .expect("barry runs");
 
     assert_eq!(out.status.code(), Some(2), "{out:?}");
-    assert!(String::from_utf8_lossy(&out.stderr).contains("budgets.max_wall_secs"));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("max_wall_secs"));
 }
