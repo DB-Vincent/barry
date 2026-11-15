@@ -122,6 +122,16 @@ impl Policy {
     pub fn check_write(&self, path: &Path) -> (Decision, Option<PathBuf>) {
         let canonical = match canonicalise(&self.cwd, path) {
             Ok(c) => c,
+            // A dangling symlink is not something the user can meaningfully
+            // approve: the file that a write would create is elsewhere.
+            Err(PathError::DanglingSymlink { .. }) => {
+                return (
+                    Decision::Deny {
+                        reason: "path is a dangling symlink".into(),
+                    },
+                    None,
+                )
+            }
             Err(_) => {
                 return (
                     Decision::Ask {

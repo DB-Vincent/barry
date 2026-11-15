@@ -412,6 +412,54 @@ async fn execute_read(path: &str) -> Result<ToolResult, CoreError> {
     Ok(ToolResult::new(true, numbered.clone(), numbered))
 }
 
+/// Resolve the path a write or edit will really touch.
+///
+/// The policy already canonicalised the path to decide; writing to that same
+/// canonical target means a symlink cannot be swapped in between the check and
+/// the write to redirect the bytes elsewhere.
+fn canonical_target(policy: &Option<Policy>, path: &str) -> Result<PathBuf, CoreError> {
+    match policy {
+        Some(policy) => barry_policy::canonicalise(policy.cwd(), Path::new(path))
+            .map_err(|e| CoreError::Provider(format!("cannot resolve path: {e}"))),
+        None => Ok(PathBuf::from(path)),
+    }
+}
+
+/// Write `content` to `target` atomically and without following a symlink at
+/// the final component.
+///
+/// A sibling temp file is written first and then renamed over the target:
+/// `rename` replaces a symlink instead of following it, and a failed write
+/// never leaves a half-written file behind.
+fn write_file(target: &Path, content: &str) -> std::io::Result<()> {
+    let parent = target
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let name = target
+        .file_name()
+        .ok_or_else(|| std::io::Error::other("path has no file name"))?;
+    let tmp = parent.join(format!(
+        ".{}.barry-{}.tmp",
+        name.to_string_lossy(),
+        std::process::id()
+    ));
+
+    std::fs::write(&tmp, content)?;
+    // Keep the mode of the file being replaced (an edit must not turn 0644
+    // into 0600). Symlinks are not followed: `rename` below replaces the link.
+    if let Ok(meta) = std::fs::symlink_metadata(target) {
+        if meta.is_file() {
+            let _ = std::fs::set_permissions(&tmp, meta.permissions());
+        }
+    }
+    if let Err(err) = std::fs::rename(&tmp, target) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(err);
+    }
+    Ok(())
+}
+
 /// Run a read through the policy check before reading the file.
 async fn execute_read_with_policy(
     path: &str,
@@ -462,17 +510,17 @@ async fn execute_read_with_policy(
     execute_read(path).await
 }
 
-async fn execute_write(path: &str, content: &str) -> Result<ToolResult, CoreError> {
-    std::fs::write(path, content).map_err(|e| CoreError::Provider(e.to_string()))?;
+async fn execute_write(path: &Path, content: &str) -> Result<ToolResult, CoreError> {
+    write_file(path, content).map_err(|e| CoreError::Provider(e.to_string()))?;
     Ok(ToolResult::new(
         true,
-        format!("wrote {} bytes to {}", content.len(), path),
-        format!("wrote {} bytes to {}", content.len(), path),
+        format!("wrote {} bytes to {}", content.len(), path.display()),
+        format!("wrote {} bytes to {}", content.len(), path.display()),
     ))
 }
 
 async fn execute_edit(
-    path: &str,
+    path: &Path,
     old_string: &str,
     new_string: &str,
 ) -> Result<ToolResult, CoreError> {
@@ -482,17 +530,23 @@ async fn execute_edit(
     match count {
         0 => Ok(ToolResult::new(
             false,
-            format!("no matches found for '{}' in {}", old_string, path),
+            format!(
+                "no matches found for '{}' in {}",
+                old_string,
+                path.display()
+            ),
             format!("no matches found for '{}'", old_string),
         )),
         1 => {
             let new_content = content.replacen(old_string, new_string, 1);
-            std::fs::write(path, &new_content).map_err(|e| CoreError::Provider(e.to_string()))?;
+            write_file(path, &new_content).map_err(|e| CoreError::Provider(e.to_string()))?;
             Ok(ToolResult::new(
                 true,
                 format!(
                     "replaced 1 occurrence of '{}' with '{}' in {}",
-                    old_string, new_string, path
+                    old_string,
+                    new_string,
+                    path.display()
                 ),
                 format!("replaced '{}' with '{}'", old_string, new_string),
             ))
@@ -501,7 +555,9 @@ async fn execute_edit(
             false,
             format!(
                 "found {} matches for '{}' in {}; no changes made",
-                n, old_string, path
+                n,
+                old_string,
+                path.display()
             ),
             format!("found {} matches for '{}'; no changes made", n, old_string),
         )),
@@ -598,6 +654,17 @@ async fn check_write_approval(
     }
 }
 
+/// The result the model sees when a write or edit was refused. The policy's
+/// reason is passed through: "denied by user" and "path is a dangling symlink"
+/// call for very different next steps.
+fn denied_result(decision: &Decision) -> ToolResult {
+    let reason = match decision {
+        Decision::Deny { reason } => reason.clone(),
+        _ => "denied by user".to_string(),
+    };
+    ToolResult::new(false, reason.clone(), reason)
+}
+
 /// Run a write through the policy + approval flow.
 async fn execute_write_with_approval(
     call: &ToolCall,
@@ -623,13 +690,12 @@ async fn execute_write_with_approval(
         record_grant(log, dir)?;
     }
     if decision.allowed {
-        execute_write(path, content).await
+        // Write through the canonical target, so what the policy approved is
+        // exactly what is written even if the path is a symlink.
+        let target = canonical_target(policy, path)?;
+        execute_write(&target, content).await
     } else {
-        Ok(ToolResult::new(
-            false,
-            "denied by user".to_string(),
-            "denied by user".to_string(),
-        ))
+        Ok(denied_result(&decision.decision))
     }
 }
 
@@ -662,13 +728,10 @@ async fn execute_edit_with_approval(
         record_grant(log, dir)?;
     }
     if decision.allowed {
-        execute_edit(path, old_string, new_string).await
+        let target = canonical_target(policy, path)?;
+        execute_edit(&target, old_string, new_string).await
     } else {
-        Ok(ToolResult::new(
-            false,
-            "denied by user".to_string(),
-            "denied by user".to_string(),
-        ))
+        Ok(denied_result(&decision.decision))
     }
 }
 
