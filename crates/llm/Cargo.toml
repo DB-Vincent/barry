@@ -3,6 +3,10 @@ name = "barry-llm"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+# Exposes the stream parsing entry points to the cargo-fuzz targets in `fuzz/`.
+fuzzing = []
+
 [dependencies]
 barry-protocol = { workspace = true }
 serde = { workspace = true }
@@ -15,3 +19,4 @@ reqwest = { workspace = true }
 
 [dev-dependencies]
 barry-testkit = { workspace = true }
+proptest = { workspace = true }

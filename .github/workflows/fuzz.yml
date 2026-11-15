@@ -1,0 +1,42 @@
+name: Fuzz
+
+# Short smoke runs of the cargo-fuzz targets in fuzz/. Fuzzing needs nightly,
+# so this is kept apart from the main CI and runs weekly or on demand.
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [sse_stream, tool_call_chunks, canonicalise, check_bash]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install nightly toolchain
+        uses: dtolnay/rust-toolchain@6a52aad76a94a5fbc50d567bb5be24419801c1fb # nightly
+        with:
+          toolchain: nightly
+          profile: minimal
+
+      - name: Install cargo-fuzz
+        uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
+        with:
+          tool: cargo-fuzz
+
+      - name: Fuzz ${{ matrix.target }} for 60 seconds
+        run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=60
+
+      - name: Upload crashing inputs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}

@@ -90,6 +90,9 @@ pub(crate) fn parse_event_block(block: &str) -> Option<SseEvent> {
 }
 
 /// A tool call assembled from fragments spread over several chunks.
+/// Most tool calls accepted in one response.
+const MAX_TOOL_CALLS: usize = 128;
+
 #[derive(Debug, Clone, Default)]
 struct ToolCallAccumulator {
     id: Option<String>,
@@ -211,6 +214,11 @@ impl StreamState {
 
     fn apply_tool_call_fragment(&mut self, fragment: &Value) {
         let index = fragment.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+        // The index comes from the network. Without a bound, `{"index": 4e9}`
+        // would allocate billions of accumulators.
+        if index >= MAX_TOOL_CALLS {
+            return;
+        }
         while self.tool_calls.len() <= index {
             self.tool_calls.push(ToolCallAccumulator::default());
         }

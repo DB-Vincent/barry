@@ -14,6 +14,9 @@ use thiserror::Error;
 pub use barry_protocol::Decision;
 pub use path::{canonicalise, is_under, PathError};
 
+#[cfg(test)]
+mod prop_tests;
+
 /// Errors from the policy engine.
 #[derive(Debug, Error)]
 pub enum PolicyError {
