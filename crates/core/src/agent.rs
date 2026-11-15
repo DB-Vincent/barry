@@ -76,6 +76,9 @@ pub struct Agent {
     pub(crate) approver: Arc<dyn Approver>,
     policy: Option<Policy>,
     history: Vec<Message>,
+    /// Working directory this agent works in (#28), captured once instead of
+    /// asking the process during a turn.
+    cwd: PathBuf,
     /// Built once so every request carries the same prefix (PLAN 5.2).
     system_prompt: String,
     /// Context window (tokens) used for compaction heuristics.
@@ -101,21 +104,41 @@ pub struct Agent {
 }
 
 impl Agent {
+    /// Build an agent for the process's working directory and home.
+    ///
+    /// This is the only place that asks the process for either (#28).
+    /// Everything afterwards works from the values stored on the agent, so
+    /// several agents in one process - sub-agents later, or tests with
+    /// different workspaces - do not share whatever directory the process
+    /// happens to be in.
     pub fn new(
         cfg: crate::config::Config,
         provider: Arc<dyn Provider>,
         approver: Arc<dyn Approver>,
         policy: Option<Policy>,
     ) -> Result<Self, CoreError> {
-        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let home = std::env::var("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("."));
+        Self::with_paths(cfg, provider, approver, policy, cwd, home)
+    }
+
+    /// Build an agent for an explicit working directory and home (#28).
+    pub fn with_paths(
+        cfg: crate::config::Config,
+        provider: Arc<dyn Provider>,
+        approver: Arc<dyn Approver>,
+        policy: Option<Policy>,
+        cwd: PathBuf,
+        home: PathBuf,
+    ) -> Result<Self, CoreError> {
         let date = crate::prompt::today();
 
         // PLAN 6.3: assemble the AGENTS.md and skills sections for the prompt.
         let git_root = find_git_root(&cwd);
         let agents_md_section = crate::context::instructions_section(&git_root, &cwd);
-        let global_skills = std::env::var("HOME")
-            .map(|home| PathBuf::from(home).join(".config/barry/skills"))
-            .unwrap_or_else(|_| PathBuf::from(".config/barry/skills"));
+        let global_skills = home.join(".config/barry/skills");
         let project_skills = git_root.join(".barry/skills");
         let skills_section = crate::context::skills_section(&global_skills, &project_skills);
 
@@ -139,6 +162,7 @@ impl Agent {
             provider,
             approver,
             policy,
+            cwd,
             history: Vec::new(),
             system_prompt,
             context_window,
@@ -156,9 +180,8 @@ impl Agent {
 
     /// Attach an audit log and record `session_start` (PLAN 6.7).
     pub fn with_session_log(mut self, mut log: SessionLog) -> Self {
-        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         if let Err(err) = log.append(EntryKind::SessionStart {
-            cwd: cwd.display().to_string(),
+            cwd: self.cwd.display().to_string(),
             model: self.cfg.default_model.clone(),
             barry_version: env!("CARGO_PKG_VERSION").to_string(),
             policy_sha256: session::policy_fingerprint(self.policy.as_ref()),
@@ -602,12 +625,12 @@ impl Agent {
                                     // A tool error is a result, not a turn failure.
                                     let result = execute_tool(
                                         call,
-                                        &self.cfg,
                                         &mut self.policy,
                                         &self.approver,
                                         &cancel,
                                         self.session.as_mut(),
                                         &self.hooks,
+                                        &self.cwd,
                                     )
                                     .await
                                     .unwrap_or_else(|err| ToolResult::internal_error(&err));

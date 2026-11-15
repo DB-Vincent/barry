@@ -12,7 +12,6 @@ use tokio::io::AsyncReadExt;
 use tokio_util::sync::CancellationToken;
 
 use crate::bounded::{read_numbered, ReadError, StreamCapture, STREAM_LIMIT};
-use crate::config::Config;
 use crate::hooks::{Hook, HookOutcome};
 use crate::session::{decided_by_label, decision_label, EntryKind, SessionLog};
 use crate::{Approver, CoreError};
@@ -186,18 +185,18 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
 
 pub(crate) async fn execute_tool(
     call: &ToolCall,
-    _cfg: &Config,
     policy: &mut Option<Policy>,
     approver: &Arc<dyn Approver>,
     cancel: &CancellationToken,
     mut log: Option<&mut SessionLog>,
     hooks: &[Hook],
+    cwd: &std::path::Path,
 ) -> Result<ToolResult, CoreError> {
     // PLAN 6.5: PreToolUse hooks run before the policy. A hook can deny or
     // block the tool, rewrite its input, or emit a warning.
-    let cwd = std::env::current_dir()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|_| ".".to_string());
+    // The agent's working directory, not the process's (#28): a hook is told
+    // where the agent operates, which is not necessarily where barry runs.
+    let cwd = cwd.display().to_string();
     let mut arguments = call.arguments.clone();
     for hook in hooks.iter().filter(|h| h.matches(&call.name)) {
         let input = serde_json::to_string(&arguments).unwrap_or_default();
