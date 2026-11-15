@@ -447,7 +447,14 @@ pub(crate) async fn execute_tool(
 /// the whole file (#19). The result already carries the PLAN 6.4 marker when
 /// the file did not fit.
 async fn execute_read(path: &str) -> Result<ToolResult, CoreError> {
-    match read_numbered(Path::new(path)) {
+    // The stat, the windowed read and the newline count are filesystem work on
+    // a synchronous helper: keep them off the runtime thread (#25).
+    let path = Path::new(path).to_path_buf();
+    let read = tokio::task::spawn_blocking(move || read_numbered(&path))
+        .await
+        .map_err(|err| CoreError::Provider(format!("read task failed: {err}")))?;
+
+    match read {
         Ok(numbered) => Ok(ToolResult::new(true, numbered.clone(), numbered)),
         // A file too large to read is a failed call the model can act on, not
         // an internal error: say what to do instead.
@@ -478,7 +485,7 @@ fn canonical_target(policy: &Option<Policy>, path: &str) -> Result<PathBuf, Core
 /// A sibling temp file is written first and then renamed over the target:
 /// `rename` replaces a symlink instead of following it, and a failed write
 /// never leaves a half-written file behind.
-fn write_file(target: &Path, content: &str) -> std::io::Result<()> {
+async fn write_file(target: &Path, content: &str) -> std::io::Result<()> {
     let parent = target
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -492,16 +499,16 @@ fn write_file(target: &Path, content: &str) -> std::io::Result<()> {
         std::process::id()
     ));
 
-    std::fs::write(&tmp, content)?;
+    tokio::fs::write(&tmp, content).await?;
     // Keep the mode of the file being replaced (an edit must not turn 0644
     // into 0600). Symlinks are not followed: `rename` below replaces the link.
-    if let Ok(meta) = std::fs::symlink_metadata(target) {
+    if let Ok(meta) = tokio::fs::symlink_metadata(target).await {
         if meta.is_file() {
-            let _ = std::fs::set_permissions(&tmp, meta.permissions());
+            let _ = tokio::fs::set_permissions(&tmp, meta.permissions()).await;
         }
     }
-    if let Err(err) = std::fs::rename(&tmp, target) {
-        let _ = std::fs::remove_file(&tmp);
+    if let Err(err) = tokio::fs::rename(&tmp, target).await {
+        let _ = tokio::fs::remove_file(&tmp).await;
         return Err(err);
     }
     Ok(())
@@ -558,7 +565,9 @@ async fn execute_read_with_policy(
 }
 
 async fn execute_write(path: &Path, content: &str) -> Result<ToolResult, CoreError> {
-    write_file(path, content).map_err(|e| CoreError::Provider(e.to_string()))?;
+    write_file(path, content)
+        .await
+        .map_err(|e| CoreError::Provider(e.to_string()))?;
     Ok(ToolResult::new(
         true,
         format!("wrote {} bytes to {}", content.len(), path.display()),
@@ -571,7 +580,9 @@ async fn execute_edit(
     old_string: &str,
     new_string: &str,
 ) -> Result<ToolResult, CoreError> {
-    let content = std::fs::read_to_string(path).map_err(|e| CoreError::Provider(e.to_string()))?;
+    let content = tokio::fs::read_to_string(path)
+        .await
+        .map_err(|e| CoreError::Provider(e.to_string()))?;
     let count = content.matches(old_string).count();
 
     match count {
@@ -586,7 +597,9 @@ async fn execute_edit(
         )),
         1 => {
             let new_content = content.replacen(old_string, new_string, 1);
-            write_file(path, &new_content).map_err(|e| CoreError::Provider(e.to_string()))?;
+            write_file(path, &new_content)
+                .await
+                .map_err(|e| CoreError::Provider(e.to_string()))?;
             Ok(ToolResult::new(
                 true,
                 format!(
