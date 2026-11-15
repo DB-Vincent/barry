@@ -23,6 +23,10 @@ pub(crate) struct ToolResult {
     pub(crate) display: String,
     /// Bash exit code, when the tool ran a command.
     pub(crate) exit_code: Option<i32>,
+    /// The call was refused by policy, a hook, or the approver.
+    pub(crate) denied: bool,
+    /// The file this call changed, as an absolute path.
+    pub(crate) changed: Option<PathBuf>,
 }
 
 impl ToolResult {
@@ -32,7 +36,14 @@ impl ToolResult {
             content,
             display,
             exit_code: None,
+            denied: false,
+            changed: None,
         }
+    }
+
+    fn denied(mut self) -> Self {
+        self.denied = true;
+        self
     }
 
     fn with_exit_code(mut self, exit_code: Option<i32>) -> Self {
@@ -81,6 +92,18 @@ fn record_decision(
             decided_by: decided_by_label(decided_by),
         })
         .map_err(|err| CoreError::Session(err.to_string()))
+}
+
+/// `path` as an absolute path, resolved against the current directory.
+fn absolute(path: &str) -> PathBuf {
+    let path = Path::new(path);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    }
 }
 
 /// Record a directory grant as soon as the user approves it.
@@ -220,7 +243,8 @@ pub(crate) async fn execute_tool(
                     false,
                     format!("hook denied: {reason}"),
                     "hook denied".to_string(),
-                ));
+                )
+                .denied());
             }
             HookOutcome::Block { reason } => {
                 record_decision(
@@ -235,7 +259,8 @@ pub(crate) async fn execute_tool(
                     false,
                     format!("hook blocked: {reason}"),
                     "hook blocked".to_string(),
-                ));
+                )
+                .denied());
             }
             HookOutcome::UpdatedInput { input } => {
                 if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&input) {
@@ -298,7 +323,8 @@ pub(crate) async fn execute_tool(
                         false,
                         format!("bash denied: {reason}"),
                         "bash denied".to_string(),
-                    ))
+                    )
+                    .denied())
                 }
                 Decision::Ask { reason } => {
                     let req = ApprovalRequest {
@@ -322,7 +348,8 @@ pub(crate) async fn execute_tool(
                                 false,
                                 "denied by user".to_string(),
                                 "denied by user".to_string(),
-                            ))
+                            )
+                            .denied())
                         }
                         ApprovalChoice::Once | ApprovalChoice::AlwaysThisSession => {
                             // Grant the first word of the command as a session prefix.
@@ -440,7 +467,8 @@ async fn execute_read_with_policy(
                 false,
                 format!("read denied: {reason}"),
                 "read denied".to_string(),
-            ));
+            )
+            .denied());
         }
         Decision::Ask { reason } => {
             record_decision(
@@ -455,7 +483,8 @@ async fn execute_read_with_policy(
                 false,
                 format!("read requires approval: {reason}"),
                 "read requires approval".to_string(),
-            ));
+            )
+            .denied());
         }
     }
 
@@ -623,13 +652,18 @@ async fn execute_write_with_approval(
         record_grant(log, dir)?;
     }
     if decision.allowed {
-        execute_write(path, content).await
+        let mut result = execute_write(path, content).await?;
+        if result.ok {
+            result.changed = Some(absolute(path));
+        }
+        Ok(result)
     } else {
         Ok(ToolResult::new(
             false,
             "denied by user".to_string(),
             "denied by user".to_string(),
-        ))
+        )
+        .denied())
     }
 }
 
@@ -662,13 +696,18 @@ async fn execute_edit_with_approval(
         record_grant(log, dir)?;
     }
     if decision.allowed {
-        execute_edit(path, old_string, new_string).await
+        let mut result = execute_edit(path, old_string, new_string).await?;
+        if result.ok {
+            result.changed = Some(absolute(path));
+        }
+        Ok(result)
     } else {
         Ok(ToolResult::new(
             false,
             "denied by user".to_string(),
             "denied by user".to_string(),
-        ))
+        )
+        .denied())
     }
 }
 
@@ -869,7 +908,10 @@ async fn run_sandboxed_with_retry(
     match approver.decide(&req).await {
         // Denial: the model sees the original sandbox failure, not a generic
         // "denied by user", so it can reason about the actual block.
-        ApprovalChoice::Deny => Ok(first),
+        ApprovalChoice::Deny => Ok(ToolResult {
+            denied: true,
+            ..first
+        }),
         ApprovalChoice::Once | ApprovalChoice::AlwaysThisSession => {
             policy
                 .grant_dir(&target_dir)

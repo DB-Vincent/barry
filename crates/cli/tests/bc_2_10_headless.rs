@@ -1,6 +1,6 @@
 /// BC-2.10 Headless `barry -p "hi"` prints the final answer to stdout and
 /// exits 0. `--json` prints one valid JSON object per line, ending with
-/// `TurnFinished`.
+/// `TurnFinished` and a final `RunSummary`.
 ///
 /// The provider is driven over real HTTP by `testkit::FakeLlm`, and the real
 /// binary is spawned, so this covers clap parsing, config loading, provider
@@ -48,7 +48,7 @@ async fn bc_2_10_headless_prints_the_final_answer_and_exits_0() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn bc_2_10_json_writes_one_object_per_line_ending_with_turn_finished() {
+async fn bc_2_10_json_writes_one_object_per_line_ending_with_the_summary() {
     let llm = FakeLlm::start(vec![Reply::Text {
         content: "hi".to_string(),
     }])
@@ -82,10 +82,16 @@ async fn bc_2_10_json_writes_one_object_per_line_ending_with_turn_finished() {
         "expected a TextDelta event: {events:?}"
     );
 
-    let last = events.last().expect("at least one event");
+    // The final RunSummary line follows the last TurnFinished.
+    let (summary, rest) = events.split_last().expect("at least one event");
+    assert!(
+        summary.get("RunSummary").is_some(),
+        "the last line must be RunSummary: {summary}"
+    );
+    let last = rest.last().expect("an event before the summary");
     assert!(
         last.get("TurnFinished").is_some(),
-        "the last line must be TurnFinished: {last}"
+        "TurnFinished must precede the summary: {last}"
     );
     assert_eq!(
         last["TurnFinished"]["stop"], "Stop",

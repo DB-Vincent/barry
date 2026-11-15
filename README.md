@@ -47,11 +47,30 @@ Options:
 
 | Option | Meaning |
 |--------|---------|
-| `--json` | Emit each event as one JSONL line instead of pretty output |
+| `--json` | Emit each event as one JSONL line instead of pretty output, ending with a `RunSummary` line |
 | `--model <name>` | Override the model id sent to the provider |
 | `--resume <file\|prefix>` | Continue a session from its log file, or a timestamp/UUID prefix in the default session directory |
 
-Exit codes: `0` on success, `1` on error/aborted, `2` on config error, `3` on turn limit.
+Exit codes:
+
+| Code | Meaning |
+|------|---------|
+| `0` | The model finished and no action was denied |
+| `1` | Error or aborted |
+| `2` | Config error; nothing ran |
+| `3` | Turn limit reached |
+| `4` | Reserved for budget exceeded |
+| `5` | The model finished, but at least one action was denied by policy, a hook or the approver |
+
+If several apply, error wins over turn limit, which wins over denied.
+
+With `--json`, the last line is a `RunSummary` event. It is not printed when barry exits with `2` before a run starts.
+
+```json
+{"RunSummary":{"stop_reason":"Stop","exit_code":5,"turn_limit_reached":false,"denied_actions":1,"usage":{"input_tokens":2140,"output_tokens":310},"files_changed":["/work/src/lib.rs"]}}
+```
+
+`usage` is summed over the run and is `null` when the provider reports none. `files_changed` lists absolute paths changed through the write and edit tools; files changed by bash commands are not tracked. On an error, `stop_reason` is `{"Error":"<message>"}`.
 
 Headless mode never prompts for approval: an action that needs approval is denied, and the model is told that approval is unavailable in headless mode.
 

@@ -114,7 +114,7 @@ impl Renderer {
             }
             // The approver prints its own prompt.
             Event::ApprovalNeeded(_) => {}
-            Event::TurnStarted | Event::TurnFinished { .. } => {}
+            Event::TurnStarted | Event::TurnFinished { .. } | Event::RunSummary(_) => {}
         }
     }
 

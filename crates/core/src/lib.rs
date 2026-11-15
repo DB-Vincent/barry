@@ -15,7 +15,7 @@ pub mod prompt;
 pub mod redact;
 pub mod session;
 pub mod tools;
-pub use agent::Agent;
+pub use agent::{Agent, RunStats};
 
 /// A future returned by [`Approver::decide`].
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
