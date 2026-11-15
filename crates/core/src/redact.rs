@@ -1,10 +1,32 @@
-//! Secret redaction for the session log (PLAN 6.7).
+//! Secret redaction for the session log (PLAN 6.7), and optionally for tool
+//! output on its way to the model (#17).
 //!
-//! Redaction applies **only** to the audit log. The model still receives the
-//! real tool output.
+//! The session log is always redacted. What the model receives is redacted
+//! only when `redaction.tool_output = true` is set in the config: BC-5.3 wires
+//! the model to the real tool output, and a local provider has nowhere for a
+//! secret to leak to. With a remote provider, turn it on.
+
+use std::sync::LazyLock;
 
 use regex::Regex;
 use serde_json::Value;
+
+/// The built-in secret patterns, compiled once. `Regex::new` only fails on a
+/// syntax error, and a constant pattern is covered by the redaction tests, so
+/// this is a constant expression rather than a runtime error path (#44).
+#[allow(clippy::expect_used, reason = "patterns are compile-time literals")]
+static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+    [
+        r"sk-[A-Za-z0-9_-]{20,}",
+        r"gh[pousr]_[A-Za-z0-9]{36,}",
+        r"AKIA[0-9A-Z]{16}",
+        r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+",
+        r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----",
+    ]
+    .into_iter()
+    .map(|pattern| Regex::new(pattern).expect("valid redaction regex"))
+    .collect()
+});
 
 /// Replaces recognised secrets with `[REDACTED]`.
 pub struct Redactor {
@@ -16,6 +38,7 @@ pub struct Redactor {
 impl Redactor {
     /// Build a redactor from the built-in patterns and the values of
     /// environment variables whose names look sensitive (PLAN 6.7).
+    #[must_use]
     pub fn from_env() -> Self {
         let mut literals = Vec::new();
         for (name, value) in std::env::vars_os() {
@@ -35,22 +58,9 @@ impl Redactor {
     }
 
     /// Build a redactor with explicit literal values (tests, custom setups).
-    ///
-    /// # Panics
-    ///
-    /// Never panics in practice: the built-in patterns are valid regular
-    /// expressions.
+    #[must_use]
     pub fn new(mut literals: Vec<String>) -> Self {
-        let patterns = [
-            r"sk-[A-Za-z0-9_-]{20,}",
-            r"gh[pousr]_[A-Za-z0-9]{36,}",
-            r"AKIA[0-9A-Z]{16}",
-            r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+",
-            r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----",
-        ]
-        .into_iter()
-        .map(|pattern| Regex::new(pattern).expect("valid redaction regex"))
-        .collect();
+        let patterns = PATTERNS.clone();
 
         // Longest first so a shorter literal cannot split a longer match.
         literals.sort_by_key(|value| std::cmp::Reverse(value.len()));
@@ -60,6 +70,7 @@ impl Redactor {
     }
 
     /// Redact every recognised secret in `text`.
+    #[must_use]
     pub fn redact(&self, text: &str) -> String {
         let mut out = text.to_string();
         for pattern in &self.patterns {

@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-0.1 Given no arguments except --version,
 /// when barry is invoked, then it prints `barry <semver>` and exits 0.
 #[test]

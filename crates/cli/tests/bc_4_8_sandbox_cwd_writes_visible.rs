@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-4.8 Files created in cwd by bash are visible on the host afterwards,
 /// so normal work still functions.
 use barry_testkit::{FakeLlm, Reply};
@@ -21,7 +23,7 @@ async fn bc_4_8_sandbox_cwd_writes_visible() {
     let llm = FakeLlm::start(vec![
         Reply::Tool {
             name: "bash".to_string(),
-            arguments: json!({ "command": "echo hello | tee created_by_bash.txt" }),
+            arguments: json!({ "command": "echo hello > created_by_bash.txt" }),
         },
         Reply::Text {
             content: "file created".to_string(),

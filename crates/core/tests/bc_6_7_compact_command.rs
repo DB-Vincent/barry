@@ -1,5 +1,7 @@
 //! BC-6.7 `/compact` forces compaction of the conversation context (exercised
 //! via `Agent::compact`, which the REPL `/compact` command calls).
+
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use barry_core::config::Config;
 use barry_core::session::SessionLog;
 use barry_core::{Agent, Approver, BoxFuture};
@@ -72,8 +74,11 @@ async fn bc_6_7_compact_forces_compaction() {
         max_turns: 50,
         context_window: 20_000,
         sandbox_network: true,
+        sandbox_unsandboxed: true,
+        redact_tool_output: false,
         fs_read_deny: vec![],
         fs_protected: vec![],
+        rules: vec![],
         hooks: vec![],
     };
 
@@ -83,9 +88,14 @@ async fn bc_6_7_compact_forces_compaction() {
         // Reply 2: the summarisation request from compact().
         done_text("compacted summary"),
     ]));
-    let mut agent = Agent::new(config, provider.clone(), Arc::new(AlwaysAllow), None)
-        .expect("agent constructs")
-        .with_session_log(log);
+    let mut agent = Agent::new(
+        config,
+        provider.clone(),
+        Arc::new(AlwaysAllow),
+        permissive_policy(),
+    )
+    .expect("agent constructs")
+    .with_session_log(log);
 
     // Seed some history so there is something to compact.
     let (tx, _rx) = mpsc::channel(32);
@@ -112,19 +122,38 @@ async fn bc_6_7_compact_nothing_to_compact() {
         max_turns: 50,
         context_window: 20_000,
         sandbox_network: true,
+        sandbox_unsandboxed: true,
+        redact_tool_output: false,
         fs_read_deny: vec![],
         fs_protected: vec![],
+        rules: vec![],
         hooks: vec![],
     };
     let mut agent = Agent::new(
         config,
         Arc::new(RecordingProvider::new(vec![])),
         Arc::new(AlwaysAllow),
-        None,
+        permissive_policy(),
     )
     .expect("agent constructs");
 
     // No session log and no history: nothing to compact.
     let result = agent.compact().await.expect("compact runs");
     assert!(!result, "empty history compacts to nothing");
+}
+
+/// A policy with no rules and no read-deny, for tests that cover the turn loop
+/// and the tool plumbing rather than the policy engine (#30). It pre-approves
+/// nothing: a write outside its own cwd goes to the test approver.
+fn permissive_policy() -> barry_policy::Policy {
+    barry_policy::Policy::new(barry_policy::PolicyConfig {
+        cwd: std::env::temp_dir().join("barry-test-policy-cwd"),
+        home: std::env::temp_dir().join("barry-test-policy-home"),
+        extra_writable: vec![],
+        read_deny: vec![],
+        protected: vec![],
+        rules: vec![],
+        network: true,
+    })
+    .expect("policy constructs")
 }

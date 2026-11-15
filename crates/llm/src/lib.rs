@@ -1,8 +1,6 @@
 //! LLM client for barry.
 //! Provider trait and shared request/event types.
 
-#![forbid(unsafe_code)]
-
 use barry_protocol::{Message, StopReason, ToolSpec, Usage};
 use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
@@ -69,10 +67,10 @@ pub use openai::OpenAiProvider;
 impl std::fmt::Display for LlmEvent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LlmEvent::TextDelta(s) => write!(f, "TextDelta({})", s),
-            LlmEvent::ReasoningDelta(s) => write!(f, "ReasoningDelta({})", s),
+            LlmEvent::TextDelta(s) => write!(f, "TextDelta({s})"),
+            LlmEvent::ReasoningDelta(s) => write!(f, "ReasoningDelta({s})"),
             LlmEvent::Done { stop, usage, .. } => {
-                write!(f, "Done{{stop={:?}, usage={:?}}}", stop, usage)
+                write!(f, "Done{{stop={stop:?}, usage={usage:?}}}")
             }
         }
     }

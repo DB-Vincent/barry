@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-2.6 A model that keeps calling tools stops after `max_turns`, and the
 /// user gets a "turn limit reached" notice.
 use barry_core::config::Config;
@@ -82,13 +84,16 @@ async fn bc_2_6_turn_limit_emits_notice_and_stops() {
             max_turns: 2,
             context_window: 32_768,
             sandbox_network: true,
+            sandbox_unsandboxed: true,
+            redact_tool_output: false,
             fs_read_deny: vec![],
             fs_protected: vec![],
+            rules: vec![],
             hooks: vec![],
         },
         provider.clone(),
         Arc::new(LocalApprover),
-        None,
+        permissive_policy(),
     )
     .expect("agent constructs");
 
@@ -136,4 +141,20 @@ async fn bc_2_6_turn_limit_emits_notice_and_stops() {
             ..
         }
     ));
+}
+
+/// A policy with no rules and no read-deny, for tests that cover the turn loop
+/// and the tool plumbing rather than the policy engine (#30). It pre-approves
+/// nothing: a write outside its own cwd goes to the test approver.
+fn permissive_policy() -> barry_policy::Policy {
+    barry_policy::Policy::new(barry_policy::PolicyConfig {
+        cwd: std::env::temp_dir().join("barry-test-policy-cwd"),
+        home: std::env::temp_dir().join("barry-test-policy-home"),
+        extra_writable: vec![],
+        read_deny: vec![],
+        protected: vec![],
+        rules: vec![],
+        network: true,
+    })
+    .expect("policy constructs")
 }

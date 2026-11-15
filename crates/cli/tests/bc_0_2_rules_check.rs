@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-0.2 Given no config file, defaults apply,
 /// when `barry rules check "ls"` is invoked,
 /// then it prints `allow` and exits 0.

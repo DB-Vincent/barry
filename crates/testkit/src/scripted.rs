@@ -28,6 +28,7 @@ pub struct ScriptedProvider {
 }
 
 impl ScriptedProvider {
+    #[must_use]
     pub fn new(replies: Vec<Reply>) -> Self {
         Self {
             replies: Mutex::new(replies.into()),
@@ -103,6 +104,7 @@ pub struct ScriptedApprover {
 }
 
 impl ScriptedApprover {
+    #[must_use]
     pub fn new(choices: Vec<ApprovalChoice>) -> Self {
         Self {
             choices: Mutex::new(choices.into()),
@@ -110,6 +112,7 @@ impl ScriptedApprover {
         }
     }
 
+    #[must_use]
     pub fn none() -> Self {
         Self {
             choices: Mutex::new(VecDeque::new()),
