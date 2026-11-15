@@ -3,8 +3,26 @@
 //! Redaction applies **only** to the audit log. The model still receives the
 //! real tool output.
 
+use std::sync::LazyLock;
+
 use regex::Regex;
 use serde_json::Value;
+
+/// The built-in secret patterns, compiled once. `Regex::new` only fails on a
+/// syntax error, and a constant pattern is covered by the redaction tests, so
+/// this is a constant expression rather than a runtime error path (#44).
+static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+    [
+        r"sk-[A-Za-z0-9_-]{20,}",
+        r"gh[pousr]_[A-Za-z0-9]{36,}",
+        r"AKIA[0-9A-Z]{16}",
+        r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+",
+        r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----",
+    ]
+    .into_iter()
+    .map(|pattern| Regex::new(pattern).expect("valid redaction regex"))
+    .collect()
+});
 
 /// Replaces recognised secrets with `[REDACTED]`.
 pub struct Redactor {
@@ -36,16 +54,7 @@ impl Redactor {
 
     /// Build a redactor with explicit literal values (tests, custom setups).
     pub fn new(mut literals: Vec<String>) -> Self {
-        let patterns = [
-            r"sk-[A-Za-z0-9_-]{20,}",
-            r"gh[pousr]_[A-Za-z0-9]{36,}",
-            r"AKIA[0-9A-Z]{16}",
-            r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+",
-            r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----",
-        ]
-        .into_iter()
-        .map(|pattern| Regex::new(pattern).expect("valid redaction regex"))
-        .collect();
+        let patterns = PATTERNS.clone();
 
         // Longest first so a shorter literal cannot split a longer match.
         literals.sort_by_key(|value| std::cmp::Reverse(value.len()));

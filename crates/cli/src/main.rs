@@ -175,7 +175,15 @@ fn run_command(command: Commands, cfg: &Config) -> ExitCode {
                     rules: cfg.rules.clone(),
                     network: cfg.sandbox_network,
                 };
-                let policy = barry_policy::Policy::new(policy_cfg).expect("policy");
+                let policy = match barry_policy::Policy::new(policy_cfg) {
+                    Ok(policy) => policy,
+                    // A policy that cannot be built is a config error, not a
+                    // reason to panic inside `rules check` (#44).
+                    Err(err) => {
+                        eprintln!("error: {err}");
+                        return ExitCode::from(2);
+                    }
+                };
                 let (decision, rule_id) = policy.check_bash(&command);
                 match decision {
                     barry_protocol::Decision::Allow => {
@@ -237,7 +245,9 @@ async fn run_headless(
 
     // Build the sandbox policy from config. Headless mode never trusts
     // project config, so only defaults + config file values apply.
-    let policy = Policy::new(barry_policy::PolicyConfig {
+    // A policy that cannot be built is a config error: report it and exit 2
+    // rather than panicking halfway through starting a session (#44).
+    let policy = match Policy::new(barry_policy::PolicyConfig {
         cwd: std::env::current_dir().unwrap_or_default(),
         home: std::env::var("HOME").map(PathBuf::from).unwrap_or_default(),
         extra_writable: vec![],
@@ -245,8 +255,13 @@ async fn run_headless(
         protected: cfg.fs_protected.clone(),
         rules: cfg.rules.clone(),
         network: cfg.sandbox_network,
-    })
-    .expect("policy constructs");
+    }) {
+        Ok(policy) => policy,
+        Err(err) => {
+            eprintln!("error: {err}");
+            return ExitCode::from(2);
+        }
+    };
 
     let mut agent = match resume {
         Some(spec) => {
