@@ -123,8 +123,7 @@ fn helper_exe() -> Result<PathBuf, SandboxError> {
         }
     }
 
-    let exe = std::env::current_exe()
-        .map_err(|e| SandboxError::Other(format!("cannot determine executable path: {e}")))?;
+    let exe = std::env::current_exe().map_err(SandboxError::CurrentExe)?;
     if exe.file_stem().and_then(|s| s.to_str()) == Some("barry") {
         return Ok(exe);
     }
@@ -136,9 +135,7 @@ fn helper_exe() -> Result<PathBuf, SandboxError> {
         }
     }
 
-    Err(SandboxError::Other(format!(
-        "cannot find the barry helper binary (looked next to {exe:?}); set BARRY_BIN_OVERRIDE"
-    )))
+    Err(SandboxError::HelperNotFound { exe })
 }
 
 /// Build the inner shell command that runs under `env -i` to strip secrets.

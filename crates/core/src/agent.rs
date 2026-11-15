@@ -14,7 +14,7 @@ use tokio_util::sync::CancellationToken;
 use crate::config::Config;
 use crate::hooks::Hook;
 use crate::prompt::{system_prompt, PromptContext};
-use crate::session::{self, decided_by_label, decision_label, EntryKind, SessionError, SessionLog};
+use crate::session::{self, decided_by_label, decision_label, EntryKind, SessionLog};
 use crate::tools::{execute_tool, tool_specs, ToolResult};
 use crate::{Approver, CoreError};
 
@@ -125,14 +125,12 @@ impl Agent {
     ) -> Result<Self, CoreError> {
         // Never extend a chain that does not verify: the audit trail is the
         // point of resuming from it.
-        let report = session::verify(session_file).map_err(session_error)?;
+        let report = session::verify(session_file)?;
         if let Some(line) = report.broken_at {
-            return Err(CoreError::Session(format!(
-                "session log is broken at line {line}"
-            )));
+            return Err(CoreError::SessionBroken { line });
         }
-        let history = session::replay_history(session_file).map_err(session_error)?;
-        let log = SessionLog::open_append(session_file).map_err(session_error)?;
+        let history = session::replay_history(session_file)?;
+        let log = SessionLog::open_append(session_file)?;
 
         let mut agent = Self::new(cfg, provider, approver, policy)?;
         agent.history = history;
@@ -271,7 +269,7 @@ impl Agent {
         let mut stream = self.provider.stream(req, CancellationToken::new());
         let mut summary = String::new();
         while let Some(event) = stream.next().await {
-            let event = event.map_err(|e| CoreError::Provider(e.to_string()))?;
+            let event = event?;
             if let LlmEvent::Done { message, .. } = event {
                 if let Message::User { content } | Message::Tool { content, .. } = message {
                     summary = content;
@@ -352,7 +350,7 @@ impl Agent {
             let mut stream = self.provider.stream(req, cancel.clone());
 
             while let Some(event) = stream.next().await {
-                let event = event.map_err(|e| CoreError::Provider(e.to_string()))?;
+                let event = event?;
 
                 match event {
                     LlmEvent::TextDelta(s) => {
@@ -542,10 +540,6 @@ impl Agent {
     pub fn set_provider(&mut self, provider: Arc<dyn Provider>) {
         self.provider = provider;
     }
-}
-
-fn session_error(err: SessionError) -> CoreError {
-    CoreError::Session(err.to_string())
 }
 
 /// Readable bytes of one message (content plus tool-call arguments).

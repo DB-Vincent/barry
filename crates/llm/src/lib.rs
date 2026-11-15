@@ -32,10 +32,19 @@ pub enum LlmEvent {
 pub enum LlmError {
     #[error("auth error for provider {provider}")]
     Auth { provider: String },
-    #[error("transport error: {message}")]
-    Transport { message: String },
-    #[error("stream error: {message}")]
-    Stream { message: String },
+    /// The HTTP request could not be built or sent.
+    #[error("transport error: {0}")]
+    Http(#[from] reqwest::Error),
+    /// The endpoint URL could not be joined with the request path.
+    #[error("transport error: invalid endpoint URL: {0}")]
+    InvalidUrl(#[from] url::ParseError),
+    /// The server answered with a non-success status. The body is dropped on
+    /// purpose: it may echo the API key.
+    #[error("transport error: unexpected status: {status}")]
+    UnexpectedStatus { status: u16 },
+    /// The response body failed while streaming.
+    #[error("stream error: {0}")]
+    Stream(#[source] reqwest::Error),
     #[error("cancelled")]
     Cancelled,
 }

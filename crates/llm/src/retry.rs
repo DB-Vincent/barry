@@ -17,20 +17,13 @@ pub(crate) async fn send_with_retry(
     client: &reqwest::Client,
     request: reqwest::RequestBuilder,
 ) -> Result<reqwest::Response, LlmError> {
-    let request = request.build().map_err(|e| LlmError::Transport {
-        message: e.to_string(),
-    })?;
+    let request = request.build()?;
 
     for attempt in 0..=MAX_RETRIES {
         let last_attempt = attempt == MAX_RETRIES;
         // `Request` has no `Clone`; `try_clone` fails only for non-replayable bodies.
         let Some(cloned) = request.try_clone() else {
-            return client
-                .execute(request)
-                .await
-                .map_err(|e| LlmError::Transport {
-                    message: e.to_string(),
-                });
+            return Ok(client.execute(request).await?);
         };
         match client.execute(cloned).await {
             Ok(response) if is_retryable(response.status()) && !last_attempt => {
@@ -38,11 +31,7 @@ pub(crate) async fn send_with_retry(
                 tokio::time::sleep(delay).await;
             }
             Ok(response) => return Ok(response),
-            Err(e) if last_attempt => {
-                return Err(LlmError::Transport {
-                    message: e.to_string(),
-                })
-            }
+            Err(e) if last_attempt => return Err(e.into()),
             Err(_) => tokio::time::sleep(backoff(attempt)).await,
         }
     }

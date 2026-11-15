@@ -70,9 +70,11 @@ pub(crate) struct Hook {
 
 impl Hook {
     pub(crate) fn new(config: HookConfig) -> Result<Self, CoreError> {
-        let regex = regex::Regex::new(&config.matcher).map_err(|e| {
-            CoreError::Config(format!("invalid hook matcher {:?}: {e}", config.matcher))
-        })?;
+        let regex =
+            regex::Regex::new(&config.matcher).map_err(|source| CoreError::HookMatcher {
+                matcher: config.matcher.clone(),
+                source,
+            })?;
         Ok(Self { config, regex })
     }
 
@@ -98,7 +100,7 @@ impl Hook {
             input: Some(input),
             result: None,
         })
-        .map_err(|e| CoreError::Config(format!("failed to serialize hook input: {e}")))?;
+        .map_err(CoreError::HookInput)?;
 
         let mut cmd = tokio::process::Command::new(&self.config.command[0]);
         cmd.args(&self.config.command[1..])
@@ -113,9 +115,7 @@ impl Hook {
         cmd.env_clear();
         cmd.envs(env_cleaned);
 
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| CoreError::Config(format!("failed to spawn hook: {e}")))?;
+        let mut child = cmd.spawn().map_err(CoreError::HookSpawn)?;
         {
             let mut stdin = child.stdin.take().expect("stdin open");
             use tokio::io::AsyncWriteExt;

@@ -80,7 +80,7 @@ fn record_decision(
             decision: decision_label(decision),
             decided_by: decided_by_label(decided_by),
         })
-        .map_err(|err| CoreError::Session(err.to_string()))
+        .map_err(CoreError::Session)
 }
 
 /// Record a directory grant as soon as the user approves it.
@@ -92,7 +92,7 @@ fn record_grant(log: &mut Option<&mut SessionLog>, dir: &Path) -> Result<(), Cor
         .append(EntryKind::Grant {
             dir: dir.display().to_string(),
         })
-        .map_err(|err| CoreError::Session(err.to_string()))
+        .map_err(CoreError::Session)
 }
 
 /// Record a bash prefix approval as soon as the user approves it.
@@ -104,7 +104,7 @@ fn record_prefix(log: &mut Option<&mut SessionLog>, prefix: &str) -> Result<(), 
         .append(EntryKind::PrefixApproved {
             prefix: prefix.to_string(),
         })
-        .map_err(|err| CoreError::Session(err.to_string()))
+        .map_err(CoreError::Session)
 }
 
 pub(crate) fn tool_specs() -> Vec<ToolSpec> {
@@ -751,8 +751,7 @@ async fn execute_bash_sandboxed(
     timeout_secs: u64,
     cancel: &CancellationToken,
 ) -> Result<ToolResult, CoreError> {
-    let cmd = sandbox::command(&spec, command)
-        .map_err(|e| CoreError::Provider(format!("sandbox error: {e}")))?;
+    let cmd = sandbox::command(&spec, command).map_err(CoreError::Sandbox)?;
     run_bash_command(cmd, timeout_secs, cancel).await
 }
 
@@ -871,9 +870,7 @@ async fn run_sandboxed_with_retry(
         // "denied by user", so it can reason about the actual block.
         ApprovalChoice::Deny => Ok(first),
         ApprovalChoice::Once | ApprovalChoice::AlwaysThisSession => {
-            policy
-                .grant_dir(&target_dir)
-                .map_err(|e| CoreError::Provider(format!("failed to grant directory: {e}")))?;
+            policy.grant_dir(&target_dir).map_err(CoreError::Policy)?;
             record_grant(log, &target_dir)?;
             execute_bash_sandboxed(sandbox_spec(policy), command, timeout_secs, cancel).await
         }

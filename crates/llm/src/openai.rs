@@ -129,8 +129,8 @@ async fn run_stream(
 
     if !status.is_success() {
         // Never include the response body: it may echo the key.
-        tx.send(Err(LlmError::Transport {
-            message: format!("unexpected status: {status}"),
+        tx.send(Err(LlmError::UnexpectedStatus {
+            status: status.as_u16(),
         }))
         .await
         .map_err(|_| LlmError::Cancelled)?;
@@ -157,9 +157,7 @@ async fn run_stream(
                         return Ok(());
                     }
                     Ok(Some(Err(e))) => {
-                        tx.send(Err(LlmError::Stream {
-                            message: e.to_string(),
-                        }))
+                        tx.send(Err(LlmError::Stream(e)))
                         .await
                         .map_err(|_| LlmError::Cancelled)?;
                         return Ok(());
@@ -218,10 +216,7 @@ fn chat_completions_url(base_url: &Url) -> Result<Url, LlmError> {
     if !base.path().ends_with('/') {
         base.set_path(&format!("{}/", base.path()));
     }
-    base.join("chat/completions")
-        .map_err(|e| LlmError::Transport {
-            message: e.to_string(),
-        })
+    Ok(base.join("chat/completions")?)
 }
 
 /// Map protocol messages to the OpenAI wire format.

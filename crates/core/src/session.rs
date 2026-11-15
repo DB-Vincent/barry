@@ -42,6 +42,12 @@ pub enum SessionError {
     },
     #[error("session log format error: {0}")]
     Format(String),
+    #[error("session log format error: {context}: {source}")]
+    Json {
+        context: String,
+        #[source]
+        source: serde_json::Error,
+    },
 }
 
 /// One audit entry, minus the envelope fields (`seq`, `ts`, `prev`, ...).
@@ -158,8 +164,10 @@ impl SessionLog {
         let mut prev = ZERO_HASH.to_string();
         let mut agent_id = "main".to_string();
         if let Some(last) = content.split('\n').rfind(|line| !line.is_empty()) {
-            let entry: Entry = serde_json::from_str(last)
-                .map_err(|err| SessionError::Format(format!("last line: {err}")))?;
+            let entry: Entry = serde_json::from_str(last).map_err(|source| SessionError::Json {
+                context: "last line".into(),
+                source,
+            })?;
             next_seq = entry.seq + 1;
             prev = sha256_hex(last.as_bytes());
             agent_id = entry.agent_id;
@@ -183,8 +191,10 @@ impl SessionLog {
 
     /// Append one entry, redact it, hash-chain it, and fsync.
     pub fn append(&mut self, kind: EntryKind) -> Result<(), SessionError> {
-        let mut value =
-            serde_json::to_value(&kind).map_err(|err| SessionError::Format(err.to_string()))?;
+        let mut value = serde_json::to_value(&kind).map_err(|source| SessionError::Json {
+            context: "serialize entry".into(),
+            source,
+        })?;
         let object = value
             .as_object_mut()
             .ok_or_else(|| SessionError::Format("entry is not a JSON object".into()))?;
@@ -196,8 +206,10 @@ impl SessionLog {
         // Redact before hashing and writing (PLAN 6.7).
         self.redactor.redact_value(&mut value);
 
-        let body =
-            serde_json::to_string(&value).map_err(|err| SessionError::Format(err.to_string()))?;
+        let body = serde_json::to_string(&value).map_err(|source| SessionError::Json {
+            context: "serialize entry".into(),
+            source,
+        })?;
         // The self hash covers the line up to the `,"hash"` suffix, so
         // `verify` can recompute it from the bytes that precede the suffix.
         let prefix = &body[..body.len() - 1];
@@ -284,8 +296,10 @@ pub(crate) fn replay_history(path: &Path) -> Result<Vec<Message>, SessionError> 
         .filter(|line| !line.is_empty())
         .enumerate()
     {
-        let entry: Entry = serde_json::from_str(line)
-            .map_err(|err| SessionError::Format(format!("line {}: {err}", index + 1)))?;
+        let entry: Entry = serde_json::from_str(line).map_err(|source| SessionError::Json {
+            context: format!("line {}", index + 1),
+            source,
+        })?;
         match entry.kind {
             EntryKind::Message { message } => {
                 if !matches!(message, Message::System { .. }) {
