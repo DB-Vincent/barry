@@ -14,6 +14,9 @@ pub use barry_protocol::Decision;
 pub use bash_parse::{Analysis, SimpleCmd};
 pub use path::{PathError, canonicalise, is_under};
 
+#[cfg(test)]
+mod prop_tests;
+
 /// Errors from the policy engine.
 #[derive(Debug, Error)]
 pub enum PolicyError {

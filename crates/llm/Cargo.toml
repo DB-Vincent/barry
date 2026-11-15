@@ -9,6 +9,10 @@ publish = false
 [lints]
 workspace = true
 
+[features]
+# Exposes the stream parsing entry points to the cargo-fuzz targets in `fuzz/`.
+fuzzing = []
+
 [dependencies]
 barry-protocol = { workspace = true }
 serde = { workspace = true }
@@ -23,3 +27,4 @@ time = { workspace = true }
 
 [dev-dependencies]
 barry-testkit = { workspace = true }
+proptest = { workspace = true }

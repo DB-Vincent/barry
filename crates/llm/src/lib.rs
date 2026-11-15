@@ -73,4 +73,11 @@ pub mod openai;
 mod retry;
 mod sse;
 
+#[cfg(feature = "fuzzing")]
+#[doc(hidden)]
+pub mod fuzzing;
+
+#[cfg(test)]
+mod prop_tests;
+
 pub use openai::OpenAiProvider;

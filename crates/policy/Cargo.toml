@@ -17,3 +17,5 @@ tree-sitter-bash = { workspace = true }
 
 [dev-dependencies]
 barry-testkit = { workspace = true }
+proptest = { workspace = true }
+tempfile = { workspace = true }
