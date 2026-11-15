@@ -3,6 +3,8 @@
 //! Builds a `sandbox-exec` command line with a Seatbelt profile that
 //! restricts file, network, and process access according to `SandboxSpec`.
 
+use std::fmt::Write as _;
+
 use crate::SandboxError;
 
 /// Build a `sandbox-exec` [`tokio::process::Command`] for `shell_command`.
@@ -27,10 +29,10 @@ pub(crate) fn command(
 
     // Writable roots.
     for i in 0..spec.writable_roots.len() {
-        profile.push_str(&format!(
-            "(allow file-write* (subpath (param \"WRITABLE_ROOT_{}\")))\n",
-            i
-        ));
+        let _ = writeln!(
+            profile,
+            "(allow file-write* (subpath (param \"WRITABLE_ROOT_{i}\")))"
+        );
     }
 
     // Protected read-only paths. Skip a protected deny when the user granted
@@ -40,10 +42,10 @@ pub(crate) fn command(
     // still protected if it appears later (issue #16).
     for (i, p) in spec.protected_ro.iter().enumerate() {
         if !spec.grants.iter().any(|g| p.starts_with(g)) {
-            profile.push_str(&format!(
-                "(deny file-write* (subpath (param \"PROTECTED_{}\")))\n",
-                i
-            ));
+            let _ = writeln!(
+                profile,
+                "(deny file-write* (subpath (param \"PROTECTED_{i}\")))"
+            );
         }
     }
 
@@ -52,10 +54,10 @@ pub(crate) fn command(
     // every writable root (BC-4.2, BC-4.5).
     for (i, g) in spec.grants.iter().enumerate() {
         if g.exists() {
-            profile.push_str(&format!(
-                "(allow file-write* (subpath (param \"GRANT_{}\")))\n",
-                i
-            ));
+            let _ = writeln!(
+                profile,
+                "(allow file-write* (subpath (param \"GRANT_{i}\")))"
+            );
         }
     }
 
@@ -66,11 +68,11 @@ pub(crate) fn command(
     // are denied too, so an entry that does exist is neither readable nor
     // writable from a sandboxed command.
     for i in 0..spec.read_deny.len() {
-        profile.push_str(&format!(
-            "(deny file-read* (subpath (param \"DENY_READ_{0}\")))\n\
-             (deny file-write* (subpath (param \"DENY_READ_{0}\")))\n",
-            i
-        ));
+        let _ = write!(
+            profile,
+            "(deny file-read* (subpath (param \"DENY_READ_{i}\")))\n\
+             (deny file-write* (subpath (param \"DENY_READ_{i}\")))\n"
+        );
     }
 
     // Network.

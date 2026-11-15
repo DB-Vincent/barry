@@ -19,7 +19,10 @@ fn policy(ws: &Workspace, extra: Vec<PathBuf>, protected: &[&str]) -> Policy {
         home: ws.home().to_path_buf(),
         extra_writable: extra,
         read_deny: vec![],
-        protected: protected.iter().map(|p| p.to_string()).collect(),
+        protected: protected
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect(),
         rules: vec![],
         network: false,
     })

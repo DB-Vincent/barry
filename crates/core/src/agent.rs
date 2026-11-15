@@ -123,9 +123,7 @@ impl Agent {
         policy: Policy,
     ) -> Result<Self, CoreError> {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let home = std::env::var("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("."));
+        let home = std::env::var("HOME").map_or_else(|_| PathBuf::from("."), PathBuf::from);
         Self::with_paths(cfg, provider, approver, policy, cwd, home)
     }
 
@@ -186,6 +184,7 @@ impl Agent {
     }
 
     /// Attach an audit log and record `session_start` (PLAN 6.7).
+    #[must_use]
     pub fn with_session_log(mut self, mut log: SessionLog) -> Self {
         if let Err(err) = log.append(EntryKind::SessionStart {
             cwd: self.cwd.display().to_string(),
@@ -740,6 +739,7 @@ impl Agent {
     }
 
     /// Directories granted this session (PLAN 6.9 `/grants`).
+    #[must_use]
     pub fn grants(&self) -> Vec<std::path::PathBuf> {
         self.policy.grants().to_vec()
     }
@@ -765,8 +765,8 @@ fn message_bytes(m: &Message) -> u64 {
             reasoning,
             tool_calls,
         } => {
-            let mut n = content.as_ref().map(|s| s.len()).unwrap_or(0);
-            n += reasoning.as_ref().map(|s| s.len()).unwrap_or(0);
+            let mut n = content.as_ref().map_or(0, std::string::String::len);
+            n += reasoning.as_ref().map_or(0, std::string::String::len);
             n += tool_calls
                 .iter()
                 .map(|c| c.arguments.to_string().len())

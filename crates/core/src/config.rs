@@ -129,6 +129,7 @@ impl Default for Config {
 ///
 /// `$XDG_CONFIG_HOME/barry/config.toml`, falling back to
 /// `~/.config/barry/config.toml` as the XDG spec says.
+#[must_use]
 pub fn default_config_path() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("XDG_CONFIG_HOME").filter(|dir| !dir.is_empty()) {
         return Some(PathBuf::from(dir).join("barry/config.toml"));

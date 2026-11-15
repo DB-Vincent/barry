@@ -41,6 +41,7 @@ impl OpenAiProvider {
     /// - `api_key_env`: name of the env var holding the key, or `None`
     /// - `max_output_tokens`: value of `max_tokens` in the request body
     /// - `compat`: provider quirks (reasoning field, parallel tools, stream usage)
+    #[must_use]
     pub fn new(
         model: String,
         base_url: Url,

@@ -13,6 +13,7 @@ pub(crate) fn truncation_marker(cut: u64, total: u64) -> String {
 /// Returns `s` unchanged (without copying) when it fits in `max_bytes`.
 /// Otherwise keeps the first 12,000 and last 12,000 bytes, joined by a marker
 /// that states how many bytes were cut and the original size.
+#[must_use]
 pub fn truncate(s: &str, max_bytes: usize) -> Cow<'_, str> {
     if s.len() <= max_bytes {
         return Cow::Borrowed(s);

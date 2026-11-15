@@ -54,9 +54,8 @@ async fn run(ctx: ToolCtx<'_>) -> Result<ToolResult, CoreError> {
     let timeout_secs = ctx
         .arguments
         .get("timeout_secs")
-        .and_then(|v| v.as_u64())
-        .map(|secs| secs.clamp(1, 600))
-        .unwrap_or(120);
+        .and_then(serde_json::Value::as_u64)
+        .map_or(120, |secs| secs.clamp(1, 600));
     let ToolCtx {
         call,
         policy,
@@ -262,7 +261,7 @@ fn sandbox_denied_dir(_result: &ToolResult, command: &str) -> Option<std::path::
 
         if let Some(target) = target {
             let path = std::path::Path::new(target);
-            return path.parent().map(|p| p.to_path_buf());
+            return path.parent().map(std::path::Path::to_path_buf);
         }
     }
     None

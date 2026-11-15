@@ -99,14 +99,12 @@ impl Policy {
 
     /// Check a read against policy. Reads under a read-deny entry are denied;
     /// everything else is allowed.
+    #[must_use]
     pub fn check_read(&self, path: &Path) -> Decision {
-        let canonical = match canonicalise(&self.cwd, path) {
-            Ok(c) => c,
-            Err(_) => {
-                return Decision::Deny {
-                    reason: "cannot canonicalise path".into(),
-                };
-            }
+        let Ok(canonical) = canonicalise(&self.cwd, path) else {
+            return Decision::Deny {
+                reason: "cannot canonicalise path".into(),
+            };
         };
 
         for deny in &self.read_deny {
@@ -124,6 +122,7 @@ impl Policy {
     ///
     /// Returns `(Decision, Option<PathBuf>)`. The grant path, when `Some`,
     /// is the parent directory the user would need to grant.
+    #[must_use]
     pub fn check_write(&self, path: &Path) -> (Decision, Option<PathBuf>) {
         let canonical = match canonicalise(&self.cwd, path) {
             Ok(c) => c,
@@ -233,22 +232,26 @@ impl Policy {
     }
 
     /// Session working directory.
+    #[must_use]
     pub fn cwd(&self) -> &Path {
         &self.cwd
     }
 
     /// Writable roots (cwd + extra writable dirs). Grants are separate so the
     /// sandbox can mount them after protected paths.
+    #[must_use]
     pub fn writable_roots(&self) -> &[PathBuf] {
         &self.writable_roots
     }
 
     /// Explicit directory grants, mounted read-write after protected paths.
+    #[must_use]
     pub fn grants(&self) -> &[PathBuf] {
         &self.grants
     }
 
     /// Whether `path` lies under a directory granted this session.
+    #[must_use]
     pub fn is_granted(&self, path: &Path) -> bool {
         let Ok(canonical) = canonicalise(&self.cwd, path) else {
             return false;
@@ -257,11 +260,13 @@ impl Policy {
     }
 
     /// Read-deny paths (canonicalised).
+    #[must_use]
     pub fn read_deny_paths(&self) -> &[PathBuf] {
         &self.read_deny
     }
 
     /// Protected path components (e.g. ".git").
+    #[must_use]
     pub fn protected(&self) -> &[String] {
         &self.protected
     }
@@ -270,16 +275,19 @@ impl Policy {
     ///
     /// Includes nested repositories (submodules, vendored crates) and extra
     /// writable roots, so the sandbox can mount all of them read-only.
+    #[must_use]
     pub fn protected_paths(&self) -> &[PathBuf] {
         &self.protected_paths
     }
 
     /// Configured bash rules, in order.
+    #[must_use]
     pub fn rules(&self) -> &[BashRule] {
         &self.rules
     }
 
     /// Whether sandboxed bash commands may access the network.
+    #[must_use]
     pub fn network(&self) -> bool {
         self.network
     }
@@ -290,6 +298,7 @@ impl Policy {
     /// fully understand is an `Ask`, never an `Allow`: rule matching on raw
     /// strings is exactly how `env bash -c ...`, `ls\nrm x` and
     /// `find . -exec ...` used to slip through.
+    #[must_use]
     pub fn check_bash(&self, command: &str) -> (Decision, Option<String>) {
         let commands = match bash_parse::analyse(command) {
             bash_parse::Analysis::Simple(commands) => commands,
@@ -450,7 +459,10 @@ fn is_allowed(argv: &[String]) -> bool {
     ALLOW_PREFIXES.iter().any(|prefix| {
         bash_parse::has_prefix(
             argv,
-            &prefix.iter().map(|w| w.to_string()).collect::<Vec<_>>(),
+            &prefix
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect::<Vec<_>>(),
         )
     })
 }
@@ -599,7 +611,7 @@ fn collect_protected_under(
             }
             continue;
         }
-        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        let is_dir = entry.file_type().is_ok_and(|t| t.is_dir());
         if is_dir {
             collect_protected_under(&path, protected, found, seen);
         }

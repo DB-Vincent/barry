@@ -132,9 +132,7 @@ async fn bc_3_5_dangling_symlink_write_does_not_escape_cwd() {
         "a dangling symlink inside cwd must not create a file outside it"
     );
     assert!(
-        std::fs::symlink_metadata(&link)
-            .map(|m| !m.file_type().is_file())
-            .unwrap_or(false),
+        std::fs::symlink_metadata(&link).is_ok_and(|m| !m.file_type().is_file()),
         "the link itself must be untouched"
     );
 

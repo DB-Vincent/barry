@@ -2,6 +2,7 @@
 //! Renders scripted replies as real OpenAI-compatible SSE.
 
 use std::collections::VecDeque;
+use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
@@ -53,7 +54,7 @@ impl FakeLlm {
                     .headers
                     .get("authorization")
                     .and_then(|v| v.to_str().ok())
-                    .map(|s| s.to_string());
+                    .map(std::string::ToString::to_string);
                 auths.push(auth);
                 drop(requests);
                 drop(auths);
@@ -86,16 +87,19 @@ impl FakeLlm {
     }
 
     /// The base URL of the fake server (e.g. `http://127.0.0.1:12345`).
+    #[must_use]
     pub fn uri(&self) -> String {
         self.server.uri()
     }
 
     /// Returns the parsed JSON bodies of all requests received so far.
+    #[must_use]
     pub fn requests(&self) -> Vec<Value> {
         self.requests.lock().unwrap().clone()
     }
 
     /// Returns the Authorization header of the last request, if any.
+    #[must_use]
     pub fn last_auth_header(&self) -> Option<String> {
         self.auth_headers.lock().unwrap().last().cloned().flatten()
     }
@@ -111,15 +115,17 @@ fn render_sse(reply: &Reply) -> String {
             // Split content into at least 2 chunks
             let mid = content.len() / 2;
             let (first, second) = content.split_at(mid);
-            sse.push_str(&format!(
+            let _ = write!(
+                sse,
                 "data: {{\"choices\":[{{\"delta\":{{\"content\":\"{}\"}}}}]}}\n\n",
                 escape_json(first)
-            ));
+            );
             if !second.is_empty() {
-                sse.push_str(&format!(
+                let _ = write!(
+                    sse,
                     "data: {{\"choices\":[{{\"delta\":{{\"content\":\"{}\"}}}}]}}\n\n",
                     escape_json(second)
-                ));
+                );
             }
             // Finish reason
             sse.push_str("data: {\"choices\":[{\"finish_reason\":\"stop\"}]}\n\n");
@@ -131,15 +137,17 @@ fn render_sse(reply: &Reply) -> String {
         Reply::Tool { name, arguments } => {
             let args_str = serde_json::to_string(arguments).unwrap();
             // Role chunk with tool_calls placeholder
-            sse.push_str(&format!(
+            let _ = write!(
+                sse,
                 "data: {{\"choices\":[{{\"delta\":{{\"role\":\"assistant\",\"tool_calls\":[{{\"index\":0,\"id\":\"call_1\",\"function\":{{\"name\":\"{}\",\"arguments\":\"\"}}}}]}}}}]}}\n\n",
                 escape_json(name)
-            ));
+            );
             // Arguments chunk
-            sse.push_str(&format!(
+            let _ = write!(
+                sse,
                 "data: {{\"choices\":[{{\"delta\":{{\"tool_calls\":[{{\"index\":0,\"function\":{{\"arguments\":\"{}\"}}}}]}}}}]}}\n\n",
                 escape_json(&args_str)
-            ));
+            );
             // Finish reason
             sse.push_str("data: {\"choices\":[{\"finish_reason\":\"tool_calls\"}]}\n\n");
             // Usage

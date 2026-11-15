@@ -148,7 +148,7 @@ fn helper_exe() -> Result<PathBuf, SandboxError> {
 
     let exe = std::env::current_exe()
         .map_err(|e| SandboxError::Other(format!("cannot determine executable path: {e}")))?;
-    if exe.file_stem().and_then(|s| s.to_str()) == Some("barry") {
+    if exe.file_stem().and_then(std::ffi::OsStr::to_str) == Some("barry") {
         return Ok(exe);
     }
 

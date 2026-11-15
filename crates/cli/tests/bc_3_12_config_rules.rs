@@ -149,18 +149,14 @@ async fn configured_deny_rule_blocks_bash_in_headless() {
     );
 
     let saw_rule = llm.requests().iter().any(|req| {
-        req["messages"]
-            .as_array()
-            .map(|msgs| {
-                msgs.iter().any(|m| {
-                    m["role"] == "tool"
-                        && m["content"]
-                            .as_str()
-                            .map(|c| c.contains("rule no-echo"))
-                            .unwrap_or(false)
-                })
+        req["messages"].as_array().is_some_and(|msgs| {
+            msgs.iter().any(|m| {
+                m["role"] == "tool"
+                    && m["content"]
+                        .as_str()
+                        .is_some_and(|c| c.contains("rule no-echo"))
             })
-            .unwrap_or(false)
+        })
     });
     assert!(saw_rule, "the model should see the configured deny rule");
 }

@@ -72,8 +72,7 @@ fn retry_delay(response: &reqwest::Response, attempt: u32) -> Duration {
         .get(reqwest::header::RETRY_AFTER)
         .and_then(|value| value.to_str().ok())
         .and_then(parse_retry_after)
-        .map(|delay| delay.min(MAX_RETRY_AFTER))
-        .unwrap_or_else(|| backoff(attempt))
+        .map_or_else(|| backoff(attempt), |delay| delay.min(MAX_RETRY_AFTER))
 }
 
 /// `Retry-After` is either a number of seconds or an HTTP-date (RFC 7231).
@@ -99,8 +98,7 @@ fn backoff(attempt: u32) -> Duration {
 fn jitter_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| u64::from(d.subsec_nanos()) % MAX_JITTER_MS)
-        .unwrap_or(0)
+        .map_or(0, |d| u64::from(d.subsec_nanos()) % MAX_JITTER_MS)
 }
 
 #[cfg(test)]

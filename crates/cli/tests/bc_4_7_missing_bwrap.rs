@@ -64,18 +64,14 @@ async fn bc_4_7_missing_bwrap_fails_closed() {
 
     // The model received a clear, actionable error.
     let saw_bwrap_error = llm.requests().iter().any(|req| {
-        req["messages"]
-            .as_array()
-            .map(|msgs| {
-                msgs.iter().any(|m| {
-                    m["role"] == "tool"
-                        && m["content"]
-                            .as_str()
-                            .map(|c| c.contains("bwrap") || c.contains("bubblewrap"))
-                            .unwrap_or(false)
-                })
+        req["messages"].as_array().is_some_and(|msgs| {
+            msgs.iter().any(|m| {
+                m["role"] == "tool"
+                    && m["content"]
+                        .as_str()
+                        .is_some_and(|c| c.contains("bwrap") || c.contains("bubblewrap"))
             })
-            .unwrap_or(false)
+        })
     });
     assert!(
         saw_bwrap_error,
