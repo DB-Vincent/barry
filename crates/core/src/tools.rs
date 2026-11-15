@@ -593,7 +593,7 @@ async fn execute_edit(
                 old_string,
                 path.display()
             ),
-            format!("no matches found for '{}'", old_string),
+            format!("no match to edit in {}", path.display()),
         )),
         1 => {
             let new_content = content.replacen(old_string, new_string, 1);
@@ -608,7 +608,7 @@ async fn execute_edit(
                     new_string,
                     path.display()
                 ),
-                format!("replaced '{}' with '{}'", old_string, new_string),
+                format!("edited {}", path.display()),
             ))
         }
         n => Ok(ToolResult::new(
@@ -619,7 +619,7 @@ async fn execute_edit(
                 old_string,
                 path.display()
             ),
-            format!("found {} matches for '{}'; no changes made", n, old_string),
+            format!("{} matches in {}; no changes made", n, path.display()),
         )),
     }
 }
@@ -798,18 +798,33 @@ fn kill_process_group(pid: u32) {
 }
 
 /// Returns `true` if a tool result indicates the sandbox blocked the command.
-/// The command failed (ok:false, exit_code != 0) and stderr contains a
-/// sandbox denial message ("Operation not permitted", "Read-only file system",
-/// "Permission denied", or "No such file or directory" when writing outside
-/// the writable roots).
-fn sandbox_denied(result: &ToolResult) -> bool {
-    !result.ok
-        && result.content.contains("exit_code:")
-        && !result.content.starts_with("exit_code: 0")
-        && (result.content.contains("Operation not permitted")
-            || result.content.contains("Read-only file system")
-            || result.content.contains("Permission denied")
-            || result.content.contains("No such file or directory"))
+///
+/// The command must have failed (ok:false, non-zero exit) with a message only
+/// the sandbox produces: "Operation not permitted" for a seccomp denial,
+/// "Read-only file system" or "Permission denied" for a mount denial.
+///
+/// "No such file or directory" is deliberately not one of those. A plain
+/// `cat missing.txt` prints exactly that, and treating it as a denial asked the
+/// user to grant a directory because of a typo (#20). It counts only when the
+/// command writes and its redirect target names a directory, which is how a
+/// write outside the writable roots fails.
+fn sandbox_denied(result: &ToolResult, command: &str) -> bool {
+    if result.ok
+        || !result.content.contains("exit_code:")
+        || result.content.starts_with("exit_code: 0")
+    {
+        return false;
+    }
+
+    if result.content.contains("Operation not permitted")
+        || result.content.contains("Read-only file system")
+        || result.content.contains("Permission denied")
+    {
+        return true;
+    }
+
+    result.content.contains("No such file or directory")
+        && sandbox_denied_dir(result, command).is_some()
 }
 
 /// Extracts the directory path that the sandbox denied access to.
@@ -1026,7 +1041,7 @@ async fn run_sandboxed_with_retry(
     log: &mut Option<&mut SessionLog>,
 ) -> Result<ToolResult, CoreError> {
     let first = execute_bash_sandboxed(sandbox_spec(policy), command, timeout_secs, cancel).await?;
-    if !sandbox_denied(&first) {
+    if !sandbox_denied(&first, command) {
         return Ok(first);
     }
 

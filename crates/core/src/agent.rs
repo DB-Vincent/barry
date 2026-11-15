@@ -25,6 +25,20 @@ fn wrap_tool_output(tool: &str, ok: bool, content: &str) -> String {
     format!("<tool_output tool=\"{tool}\" ok=\"{ok}\">\n{content}\n</tool_output>")
 }
 
+/// The one-line description shown while a tool runs (#20).
+///
+/// `write` and `edit` carry whole files in their arguments, and echoing those
+/// buries the rest of the session; the path is what the user needs to see. The
+/// other tools keep their arguments, which are short.
+fn tool_display(call: &ToolCall) -> String {
+    if matches!(call.name.as_str(), "write" | "edit") {
+        if let Some(path) = call.arguments.get("path").and_then(|p| p.as_str()) {
+            return format!("{} {path}", call.name);
+        }
+    }
+    format!("{} {}", call.name, call.arguments)
+}
+
 /// The user message that asks for a summary (PLAN 6.4, step 2).
 const SUMMARISE_PROMPT: &str = "Summarise the conversation so far for continuing the task: goals, \
     decisions, files changed, current state, open problems. Be concise.";
@@ -575,7 +589,7 @@ impl Agent {
                                         continue;
                                     }
 
-                                    let display = format!("{} {}", call.name, call.arguments);
+                                    let display = tool_display(call);
                                     events
                                         .send(Event::ToolStarted {
                                             id: call.id.clone(),
