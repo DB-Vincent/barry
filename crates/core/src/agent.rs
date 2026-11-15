@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use barry_llm::{LlmEvent, LlmRequest, Provider};
-use barry_policy::Policy;
+use barry_policy::{Policy, SessionGrants};
 use barry_protocol::{DecidedBy, Decision, Event, Message, StopReason, ToolCall};
 use futures::channel::mpsc;
 use futures::sink::SinkExt;
@@ -34,7 +34,10 @@ pub struct Agent {
     pub(crate) cfg: Config,
     provider: Arc<dyn Provider>,
     pub(crate) approver: Arc<dyn Approver>,
+    /// Immutable configuration; never changes after construction.
     policy: Option<Policy>,
+    /// Approvals given during this session, passed alongside the policy.
+    grants: SessionGrants,
     history: Vec<Message>,
     /// Built once so every request carries the same prefix (PLAN 5.2).
     system_prompt: String,
@@ -89,6 +92,7 @@ impl Agent {
             provider,
             approver,
             policy,
+            grants: SessionGrants::new(),
             history: Vec::new(),
             system_prompt,
             context_window,
@@ -439,7 +443,8 @@ impl Agent {
                                     let result = execute_tool(
                                         call,
                                         &self.cfg,
-                                        &mut self.policy,
+                                        &self.policy,
+                                        &mut self.grants,
                                         &self.approver,
                                         &cancel,
                                         self.session.as_mut(),
@@ -531,10 +536,7 @@ impl Agent {
 
     /// Directories granted this session (PLAN 6.9 `/grants`).
     pub fn grants(&self) -> Vec<std::path::PathBuf> {
-        self.policy
-            .as_ref()
-            .map(|policy| policy.grants().to_vec())
-            .unwrap_or_default()
+        self.grants.dirs().to_vec()
     }
 
     /// Replace the provider after `/model` changes the model id. History and

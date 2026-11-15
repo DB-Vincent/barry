@@ -176,7 +176,8 @@ fn run_command(command: Commands) -> ExitCode {
                     network: true,
                 };
                 let policy = barry_policy::Policy::new(cfg).expect("policy");
-                let (decision, rule_id) = policy.check_bash(&command);
+                let (decision, rule_id) =
+                    policy.check_bash(&command, &barry_policy::SessionGrants::new());
                 match decision {
                     barry_protocol::Decision::Allow => {
                         if let Some(id) = &rule_id {

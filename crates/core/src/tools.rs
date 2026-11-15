@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use barry_policy::Policy;
+use barry_policy::{Policy, SessionGrants};
 use barry_protocol::{ApprovalChoice, ApprovalRequest, DecidedBy, Decision, ToolCall, ToolSpec};
 use barry_sandbox::{self as sandbox, SandboxSpec};
 use serde_json::json;
@@ -186,10 +186,12 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
     ]
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn execute_tool(
     call: &ToolCall,
     _cfg: &Config,
-    policy: &mut Option<Policy>,
+    policy: &Option<Policy>,
+    grants: &mut SessionGrants,
     approver: &Arc<dyn Approver>,
     cancel: &CancellationToken,
     mut log: Option<&mut SessionLog>,
@@ -255,8 +257,12 @@ pub(crate) async fn execute_tool(
             let path = arguments.get("path").and_then(|v| v.as_str()).unwrap_or("");
             execute_read_with_policy(path, policy, call, &mut log).await
         }
-        "write" => execute_write_with_approval(call, policy, approver, cancel, &mut log).await,
-        "edit" => execute_edit_with_approval(call, policy, approver, cancel, &mut log).await,
+        "write" => {
+            execute_write_with_approval(call, policy, grants, approver, cancel, &mut log).await
+        }
+        "edit" => {
+            execute_edit_with_approval(call, policy, grants, approver, cancel, &mut log).await
+        }
         "bash" => {
             let command = arguments
                 .get("command")
@@ -271,13 +277,13 @@ pub(crate) async fn execute_tool(
                 .unwrap_or(120);
 
             // Policy check: deny > grant > ask > allow.
-            let Some(policy) = policy.as_mut() else {
+            let Some(policy) = policy.as_ref() else {
                 // No policy → run unsandboxed (backstop for headless/cli
                 // without policy).
                 record_decision(&mut log, call, &Decision::Allow, &DecidedBy::Default)?;
                 return execute_bash_none(command, timeout_secs, cancel).await;
             };
-            let (decision, rule_id) = policy.check_bash(command);
+            let (decision, rule_id) = policy.check_bash(command, grants);
             let decided_by = match rule_id.as_deref() {
                 // A session prefix grant is a user decision, not a rule id.
                 Some(grant) if grant.starts_with("grant: ") => DecidedBy::User,
@@ -328,7 +334,7 @@ pub(crate) async fn execute_tool(
                             // Grant the first word of the command as a session prefix.
                             let prefix = command.split_whitespace().next().map(str::to_string);
                             if let Some(first_word) = &prefix {
-                                policy.approve_prefix(first_word);
+                                grants.approve_prefix(first_word);
                             }
                             record_decision(&mut log, call, &Decision::Allow, &DecidedBy::User)?;
                             if let Some(prefix) = &prefix {
@@ -336,6 +342,7 @@ pub(crate) async fn execute_tool(
                             }
                             run_sandboxed_with_retry(
                                 policy,
+                                grants,
                                 command,
                                 timeout_secs,
                                 cancel,
@@ -351,6 +358,7 @@ pub(crate) async fn execute_tool(
                     record_decision(&mut log, call, &Decision::Allow, &decided_by)?;
                     run_sandboxed_with_retry(
                         policy,
+                        grants,
                         command,
                         timeout_secs,
                         cancel,
@@ -521,12 +529,13 @@ async fn check_write_approval(
     call_id: &str,
     path: &str,
     tool: &str,
-    policy: &mut Option<Policy>,
+    policy: &Option<Policy>,
+    grants: &mut SessionGrants,
     approver: &Arc<dyn Approver>,
     _cancel: &CancellationToken,
 ) -> Result<WriteDecision, CoreError> {
     // No policy configured → no restrictions.
-    let Some(policy) = policy.as_mut() else {
+    let Some(policy) = policy.as_ref() else {
         return Ok(WriteDecision {
             allowed: true,
             decision: Decision::Allow,
@@ -535,13 +544,13 @@ async fn check_write_approval(
         });
     };
 
-    let (decision, grant_dir) = policy.check_write(Path::new(path));
+    let (decision, grant_dir) = policy.check_write(Path::new(path), grants);
     match decision {
         Decision::Allow => {
             // A path covered by an earlier grant was decided by the user, not
             // by the default in-cwd rule. Keep `decided_by` truthful after
             // "always this session".
-            let decided_by = if policy.is_granted(Path::new(path)) {
+            let decided_by = if grants.is_granted(policy, Path::new(path)) {
                 DecidedBy::User
             } else {
                 DecidedBy::Default
@@ -582,7 +591,7 @@ async fn check_write_approval(
                 ApprovalChoice::Once | ApprovalChoice::AlwaysThisSession => {
                     let mut granted = None;
                     if let Some(dir) = grant_path {
-                        if policy.grant_dir(&dir).is_ok() {
+                        if grants.grant_dir(policy, &dir).is_ok() {
                             granted = Some(dir);
                         }
                     }
@@ -601,7 +610,8 @@ async fn check_write_approval(
 /// Run a write through the policy + approval flow.
 async fn execute_write_with_approval(
     call: &ToolCall,
-    policy: &mut Option<Policy>,
+    policy: &Option<Policy>,
+    grants: &mut SessionGrants,
     approver: &Arc<dyn Approver>,
     cancel: &CancellationToken,
     log: &mut Option<&mut SessionLog>,
@@ -616,7 +626,8 @@ async fn execute_write_with_approval(
         .get("content")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    let decision = check_write_approval(&call.id, path, "write", policy, approver, cancel).await?;
+    let decision =
+        check_write_approval(&call.id, path, "write", policy, grants, approver, cancel).await?;
     // Record the approval before doing the write, so a crash cannot lose it.
     record_decision(log, call, &decision.decision, &decision.decided_by)?;
     if let Some(dir) = &decision.grant {
@@ -636,7 +647,8 @@ async fn execute_write_with_approval(
 /// Run an edit through the policy + approval flow.
 async fn execute_edit_with_approval(
     call: &ToolCall,
-    policy: &mut Option<Policy>,
+    policy: &Option<Policy>,
+    grants: &mut SessionGrants,
     approver: &Arc<dyn Approver>,
     cancel: &CancellationToken,
     log: &mut Option<&mut SessionLog>,
@@ -656,7 +668,8 @@ async fn execute_edit_with_approval(
         .get("new_string")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    let decision = check_write_approval(&call.id, path, "edit", policy, approver, cancel).await?;
+    let decision =
+        check_write_approval(&call.id, path, "edit", policy, grants, approver, cancel).await?;
     record_decision(log, call, &decision.decision, &decision.decided_by)?;
     if let Some(dir) = &decision.grant {
         record_grant(log, dir)?;
@@ -817,11 +830,11 @@ async fn run_bash_command(
 
 /// Build the sandbox spec from the current policy. Rebuilt after a grant so
 /// the retry sees the newly granted directory.
-fn sandbox_spec(policy: &Policy) -> SandboxSpec {
+fn sandbox_spec(policy: &Policy, grants: &SessionGrants) -> SandboxSpec {
     SandboxSpec {
         cwd: policy.cwd().to_path_buf(),
         writable_roots: policy.writable_roots().to_vec(),
-        grants: policy.grants().to_vec(),
+        grants: grants.dirs().to_vec(),
         read_deny: policy.read_deny_paths().to_vec(),
         protected_ro: policy
             .protected()
@@ -839,8 +852,10 @@ fn sandbox_spec(policy: &Policy) -> SandboxSpec {
 /// sandbox denial message), offer the user a directory grant and retry once
 /// (PLAN 6.2, BC-4.2). If the user denies the grant, the original sandbox
 /// failure goes to the model unchanged.
+#[allow(clippy::too_many_arguments)]
 async fn run_sandboxed_with_retry(
-    policy: &mut Policy,
+    policy: &Policy,
+    grants: &mut SessionGrants,
     command: &str,
     timeout_secs: u64,
     cancel: &CancellationToken,
@@ -848,7 +863,8 @@ async fn run_sandboxed_with_retry(
     call_id: String,
     log: &mut Option<&mut SessionLog>,
 ) -> Result<ToolResult, CoreError> {
-    let first = execute_bash_sandboxed(sandbox_spec(policy), command, timeout_secs, cancel).await?;
+    let first =
+        execute_bash_sandboxed(sandbox_spec(policy, grants), command, timeout_secs, cancel).await?;
     if !sandbox_denied(&first) {
         return Ok(first);
     }
@@ -871,11 +887,12 @@ async fn run_sandboxed_with_retry(
         // "denied by user", so it can reason about the actual block.
         ApprovalChoice::Deny => Ok(first),
         ApprovalChoice::Once | ApprovalChoice::AlwaysThisSession => {
-            policy
-                .grant_dir(&target_dir)
+            grants
+                .grant_dir(policy, &target_dir)
                 .map_err(|e| CoreError::Provider(format!("failed to grant directory: {e}")))?;
             record_grant(log, &target_dir)?;
-            execute_bash_sandboxed(sandbox_spec(policy), command, timeout_secs, cancel).await
+            execute_bash_sandboxed(sandbox_spec(policy, grants), command, timeout_secs, cancel)
+                .await
         }
     }
 }

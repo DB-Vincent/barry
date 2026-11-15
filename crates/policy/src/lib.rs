@@ -43,15 +43,85 @@ pub struct BashRule {
     pub decision: Decision,
 }
 
-/// The writable roots for a session: cwd, extra writable dirs, and grants.
+/// Approvals the user gave during one session.
+///
+/// Kept apart from [`Policy`] so the configured policy never changes after
+/// construction: everything that can widen what the agent may do at runtime
+/// lives here, is created empty, and is passed alongside the policy to each
+/// check. Dropping it ends the grants.
+#[derive(Debug, Clone, Default)]
+pub struct SessionGrants {
+    dirs: Vec<PathBuf>,
+    bash_prefixes: Vec<String>,
+}
+
+impl SessionGrants {
+    /// No grants.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record a directory grant, making it writable for the rest of the session.
+    ///
+    /// Relative paths resolve against the policy's working directory.
+    pub fn grant_dir(&mut self, policy: &Policy, dir: &Path) -> Result<(), PolicyError> {
+        let canonical = match canonicalise(&policy.cwd, dir) {
+            Ok(c) => c,
+            Err(PathError::DotDot { .. }) => {
+                // `..` components are rejected by canonicalise (PLAN 6.1.1),
+                // but grant_dir is user-initiated explicit permission, so
+                // resolve `..` manually by walking up from cwd.
+                let mut current = policy.cwd.clone();
+                for component in dir.components() {
+                    match component {
+                        Component::ParentDir => {
+                            current.pop();
+                        }
+                        Component::Normal(c) => {
+                            current.push(c);
+                        }
+                        _ => {}
+                    }
+                }
+                current
+            }
+            Err(_) => return Err(PolicyError::InvalidPath(dir.to_path_buf())),
+        };
+        // Create the directory if it doesn't exist so bwrap can bind-mount it.
+        let _ = std::fs::create_dir_all(&canonical);
+        self.dirs.push(canonical);
+        Ok(())
+    }
+
+    /// Grant a bash command prefix for the rest of the session.
+    /// Commands starting with this prefix are allowed without asking.
+    pub fn approve_prefix(&mut self, prefix: &str) {
+        self.bash_prefixes.push(prefix.to_string());
+    }
+
+    /// Explicit directory grants, mounted read-write after protected paths.
+    pub fn dirs(&self) -> &[PathBuf] {
+        &self.dirs
+    }
+
+    /// Whether `path` lies under a directory granted this session.
+    pub fn is_granted(&self, policy: &Policy, path: &Path) -> bool {
+        let Ok(canonical) = canonicalise(&policy.cwd, path) else {
+            return false;
+        };
+        self.dirs.iter().any(|grant| is_under(&canonical, grant))
+    }
+}
+
+/// The configured policy for a session: writable roots, read-deny, protected
+/// components and bash rules. Immutable after [`Policy::new`]; session
+/// approvals live in [`SessionGrants`].
 #[derive(Debug, Clone)]
 pub struct Policy {
     cwd: PathBuf,
     read_deny: Vec<PathBuf>,
     protected: Vec<String>,
     writable_roots: Vec<PathBuf>,
-    grants: Vec<PathBuf>,
-    bash_grants: Vec<String>,
     rules: Vec<BashRule>,
     network: bool,
 }
@@ -85,8 +155,6 @@ impl Policy {
             read_deny,
             protected: cfg.protected,
             writable_roots,
-            grants: Vec::new(),
-            bash_grants: Vec::new(),
             rules: cfg.rules,
             network: cfg.network,
         })
@@ -119,7 +187,7 @@ impl Policy {
     ///
     /// Returns `(Decision, Option<PathBuf>)`. The grant path, when `Some`,
     /// is the parent directory the user would need to grant.
-    pub fn check_write(&self, path: &Path) -> (Decision, Option<PathBuf>) {
+    pub fn check_write(&self, path: &Path, grants: &SessionGrants) -> (Decision, Option<PathBuf>) {
         let canonical = match canonicalise(&self.cwd, path) {
             Ok(c) => c,
             Err(_) => {
@@ -134,7 +202,7 @@ impl Policy {
 
         // Explicit grants always win: a grant to a protected directory
         // (e.g. `.git`) is exactly what BC-4.5 asks for.
-        for grant in &self.grants {
+        for grant in &grants.dirs {
             if is_under(&canonical, grant) {
                 return (Decision::Allow, None);
             }
@@ -172,64 +240,15 @@ impl Policy {
         )
     }
 
-    /// Record a directory grant, making it writable for the rest of the session.
-    pub fn grant_dir(&mut self, dir: &Path) -> Result<(), PolicyError> {
-        let canonical = match canonicalise(&self.cwd, dir) {
-            Ok(c) => c,
-            Err(PathError::DotDot { .. }) => {
-                // `..` components are rejected by canonicalise (PLAN 6.1.1),
-                // but grant_dir is user-initiated explicit permission, so
-                // resolve `..` manually by walking up from cwd.
-                let mut current = self.cwd.clone();
-                for component in dir.components() {
-                    match component {
-                        Component::ParentDir => {
-                            current.pop();
-                        }
-                        Component::Normal(c) => {
-                            current.push(c);
-                        }
-                        _ => {}
-                    }
-                }
-                current
-            }
-            Err(_) => return Err(PolicyError::InvalidPath(dir.to_path_buf())),
-        };
-        // Create the directory if it doesn't exist so bwrap can bind-mount it.
-        let _ = std::fs::create_dir_all(&canonical);
-        self.grants.push(canonical);
-        Ok(())
-    }
-
-    /// Grant a bash command prefix for the rest of the session.
-    /// Commands starting with this prefix are allowed without asking.
-    pub fn approve_prefix(&mut self, prefix: &str) {
-        self.bash_grants.push(prefix.to_string());
-    }
-
     /// Session working directory.
     pub fn cwd(&self) -> &Path {
         &self.cwd
     }
 
-    /// Writable roots (cwd + extra writable dirs). Grants are separate so the
+    /// Writable roots (cwd + extra writable dirs). Session grants are separate so the
     /// sandbox can mount them after protected paths.
     pub fn writable_roots(&self) -> &[PathBuf] {
         &self.writable_roots
-    }
-
-    /// Explicit directory grants, mounted read-write after protected paths.
-    pub fn grants(&self) -> &[PathBuf] {
-        &self.grants
-    }
-
-    /// Whether `path` lies under a directory granted this session.
-    pub fn is_granted(&self, path: &Path) -> bool {
-        let Ok(canonical) = canonicalise(&self.cwd, path) else {
-            return false;
-        };
-        self.grants.iter().any(|grant| is_under(&canonical, grant))
     }
 
     /// Read-deny paths (canonicalised).
@@ -254,7 +273,7 @@ impl Policy {
 
     /// Check a bash command against the rule table. Deny > ask > allow.
     /// Returns the decision and, if a configured rule decided, its id.
-    pub fn check_bash(&self, command: &str) -> (Decision, Option<String>) {
+    pub fn check_bash(&self, command: &str, grants: &SessionGrants) -> (Decision, Option<String>) {
         // 1. Deny rules (substring match on the full command)
         // Grants do not override explicit denies.
         let deny_rules = [
@@ -282,7 +301,7 @@ impl Policy {
         }
 
         // 2. Session grants: commands matching a granted prefix are allowed.
-        for grant in &self.bash_grants {
+        for grant in &grants.bash_prefixes {
             if command.starts_with(grant) {
                 return (Decision::Allow, Some(format!("grant: {grant}")));
             }
