@@ -61,9 +61,13 @@ pub(crate) fn command(
 
     // Read-deny paths. No existence check: Seatbelt denies the path, so a
     // read-denied path created after the session started is denied too (#16).
+    // Writes are denied as well: a read-deny entry names a secret, and on Linux
+    // the same write disappears into the tmpfs mask instead of reaching the
+    // host, so denying it keeps the two platforms consistent.
     for i in 0..spec.read_deny.len() {
         profile.push_str(&format!(
-            "(deny file-read* (subpath (param \"DENY_READ_{}\")))\n",
+            "(deny file-read* (subpath (param \"DENY_READ_{0}\")))\n\
+             (deny file-write* (subpath (param \"DENY_READ_{0}\")))\n",
             i
         ));
     }
