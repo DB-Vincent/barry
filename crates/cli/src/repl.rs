@@ -169,20 +169,23 @@ pub(crate) async fn run(
         }
     };
 
-    #[allow(
-        clippy::expect_used,
-        reason = "startup invariant, the process cannot run without a policy"
-    )]
-    let policy = Policy::new(barry_policy::PolicyConfig {
+    // A policy that cannot be built is a config error: report it and exit 2
+    // rather than panicking on the way into the REPL (#44).
+    let policy = match Policy::new(barry_policy::PolicyConfig {
         cwd: std::env::current_dir().unwrap_or_default(),
         home: std::env::var("HOME").map(PathBuf::from).unwrap_or_default(),
         extra_writable: vec![],
         read_deny: cfg.fs_read_deny.clone(),
         protected: cfg.fs_protected.clone(),
-        rules: vec![],
+        rules: cfg.rules.clone(),
         network: cfg.sandbox_network,
-    })
-    .expect("policy constructs");
+    }) {
+        Ok(policy) => policy,
+        Err(err) => {
+            eprintln!("error: {err}");
+            return ExitCode::from(2);
+        }
+    };
 
     let input = Arc::new(tokio::sync::Mutex::new(BufReader::new(tokio::io::stdin())));
     let approver = Arc::new(ReplApprover::new(input.clone()));
@@ -197,7 +200,7 @@ pub(crate) async fn run(
                     return ExitCode::from(2);
                 }
             };
-            match Agent::resume(cfg, provider, approver.clone(), Some(policy), &path) {
+            match Agent::resume(cfg, provider, approver.clone(), policy, &path) {
                 Ok(agent) => agent,
                 Err(err) => {
                     eprintln!("{err}");
@@ -206,7 +209,7 @@ pub(crate) async fn run(
             }
         }
         None => {
-            let mut agent = match Agent::new(cfg, provider, approver.clone(), Some(policy)) {
+            let mut agent = match Agent::new(cfg, provider, approver.clone(), policy) {
                 Ok(agent) => agent,
                 Err(err) => {
                     eprintln!("{err}");

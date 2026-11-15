@@ -20,8 +20,11 @@ fn config() -> Config {
         max_turns: 10,
         context_window: 32_768,
         sandbox_network: true,
+        sandbox_unsandboxed: false,
+        redact_tool_output: false,
         fs_read_deny: vec![],
         fs_protected: vec![],
+        rules: vec![],
         hooks: vec![],
     }
 }
@@ -56,8 +59,11 @@ async fn bc_5_1_tool_call_logs_decision_and_result() {
     let ws = Workspace::new();
     let target = ws.outside().join("f");
 
-    // A write outside cwd asks, and the user approves it once.
-    let approver = Arc::new(ScriptedApprover::new(vec![ApprovalChoice::Once]));
+    // A write outside cwd asks, and the user approves the directory for the
+    // rest of the session (so a grant entry is recorded).
+    let approver = Arc::new(ScriptedApprover::new(vec![
+        ApprovalChoice::AlwaysThisSession,
+    ]));
     let provider = Arc::new(ScriptedProvider::new(vec![
         Reply::Tool {
             name: "write".to_string(),
@@ -72,14 +78,9 @@ async fn bc_5_1_tool_call_logs_decision_and_result() {
     let log = SessionLog::create_in(dir.path(), "main").expect("create session log");
     let log_path = log.path().to_path_buf();
 
-    let mut agent = Agent::new(
-        config(),
-        provider.clone(),
-        approver.clone(),
-        Some(policy(&ws)),
-    )
-    .expect("agent constructs")
-    .with_session_log(log);
+    let mut agent = Agent::new(config(), provider.clone(), approver.clone(), policy(&ws))
+        .expect("agent constructs")
+        .with_session_log(log);
 
     let (tx, _rx) = mpsc::channel(32);
     agent
@@ -145,7 +146,7 @@ async fn bc_5_1_rule_decided_call_records_the_rule_id() {
         config(),
         provider,
         Arc::new(ScriptedApprover::none()),
-        Some(policy_with_rules(&ws, rules)),
+        policy_with_rules(&ws, rules),
     )
     .expect("agent constructs")
     .with_session_log(log);
@@ -200,14 +201,9 @@ async fn bc_5_1_session_granted_call_records_the_user() {
             reason: "installing packages".to_string(),
         },
     }];
-    let mut agent = Agent::new(
-        config(),
-        provider,
-        approver,
-        Some(policy_with_rules(&ws, rules)),
-    )
-    .expect("agent constructs")
-    .with_session_log(log);
+    let mut agent = Agent::new(config(), provider, approver, policy_with_rules(&ws, rules))
+        .expect("agent constructs")
+        .with_session_log(log);
 
     let (tx, _rx) = mpsc::channel(32);
     agent
@@ -230,7 +226,7 @@ async fn bc_5_1_session_granted_call_records_the_user() {
     assert!(
         entries
             .iter()
-            .any(|e| e["type"] == "prefix_approved" && e["prefix"] == "npm"),
+            .any(|e| e["type"] == "prefix_approved" && e["prefix"] == "npm install"),
         "the approved prefix is logged: {entries:?}"
     );
 }

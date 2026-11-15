@@ -19,8 +19,11 @@ fn config() -> Config {
         max_turns: 10,
         context_window: 32_768,
         sandbox_network: true,
+        sandbox_unsandboxed: false,
+        redact_tool_output: false,
         fs_read_deny: vec![],
         fs_protected: vec![".git".to_string()],
+        rules: vec![],
         hooks: vec![],
     }
 }
@@ -52,8 +55,8 @@ async fn run(ws: &Workspace, approver: Arc<ScriptedApprover>) -> String {
             content: "done".to_string(),
         },
     ]));
-    let mut agent = Agent::new(config(), provider.clone(), approver, Some(policy(ws)))
-        .expect("agent constructs");
+    let mut agent =
+        Agent::new(config(), provider.clone(), approver, policy(ws)).expect("agent constructs");
     let (tx, _rx) = mpsc::channel(32);
     let stop = agent
         .run_turn("write .git/config", tx, CancellationToken::new())

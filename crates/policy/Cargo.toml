@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+publish = false
 
 [lints]
 workspace = true
@@ -11,6 +12,8 @@ workspace = true
 [dependencies]
 barry-protocol = { workspace = true }
 thiserror = { workspace = true }
+tree-sitter = { workspace = true }
+tree-sitter-bash = { workspace = true }
 
 [dev-dependencies]
 barry-testkit = { workspace = true }
