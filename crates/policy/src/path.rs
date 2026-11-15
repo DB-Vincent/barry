@@ -33,6 +33,12 @@ pub enum PathError {
 /// are "remaining" and appended as-is. If any remaining component is `..`,
 /// the path is rejected. A dangling symlink is rejected too: its future target
 /// is unknown, so appending it literally would let a later write escape.
+///
+/// # Errors
+///
+/// Returns [`PathError::DotDot`] if any component is `..`,
+/// [`PathError::DanglingSymlink`] if a symlink on the path has no target, and
+/// [`PathError::Io`] if an existing prefix cannot be canonicalised.
 pub fn canonicalise(cwd: &Path, path: &Path) -> Result<PathBuf, PathError> {
     let base = if path.is_absolute() {
         path.to_path_buf()

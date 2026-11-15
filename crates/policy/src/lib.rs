@@ -60,6 +60,12 @@ pub struct Policy {
 }
 
 impl Policy {
+    /// Build a policy from its configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PolicyError::InvalidRule`] if a rule has an empty `match`
+    /// pattern.
     pub fn new(cfg: PolicyConfig) -> Result<Self, PolicyError> {
         // Validate rules: each rule's `match` must be non-empty
         for rule in &cfg.rules {
@@ -187,6 +193,10 @@ impl Policy {
     }
 
     /// Record a directory grant, making it writable for the rest of the session.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PolicyError::InvalidPath`] if `dir` cannot be resolved.
     pub fn grant_dir(&mut self, dir: &Path) -> Result<(), PolicyError> {
         let canonical = self.resolve_grant(dir)?;
         self.grants.push(canonical);

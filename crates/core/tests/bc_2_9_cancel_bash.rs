@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 /// BC-2.9 Cancelling during a long bash command kills it. The history stays
-/// valid: the next run_turn succeeds, and the model sees an "interrupted by
+/// valid: the next `run_turn` succeeds, and the model sees an "interrupted by
 /// user" tool result.
 use barry_core::config::Config;
 use barry_core::{Agent, Approver, BoxFuture};

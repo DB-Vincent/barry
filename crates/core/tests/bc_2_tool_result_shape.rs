@@ -1,11 +1,11 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-/// PLAN 5 (tool result wrapping) and 5.1 (bash returns exit_code, stdout and
+/// PLAN 5 (tool result wrapping) and 5.1 (bash returns `exit_code`, stdout and
 /// stderr). Neither has its own BC number, so this pins both shapes:
 ///
-///   <tool_output tool="read" ok="true">
+/// `<tool_output tool="read" ok="true">`
 ///   1: alpha
-///   </tool_output>
+/// `</tool_output>`
 use barry_core::config::Config;
 use barry_core::{Agent, Approver, BoxFuture};
 use barry_llm::{LlmEvent, LlmRequest};

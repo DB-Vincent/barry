@@ -1,7 +1,7 @@
 //! Tool specs advertised to the model, and the executors behind them.
 //!
 //! Each tool lives in its own module behind the [`Tool`] trait. The shared
-//! wrapping (PreToolUse hooks, unknown-tool handling, decision logging) lives
+//! wrapping (`PreToolUse` hooks, unknown-tool handling, decision logging) lives
 //! here in [`execute_tool`]; each tool owns its policy check, because the
 //! checks differ per tool (read-deny, write approval, bash allowlist).
 
@@ -88,7 +88,7 @@ pub(crate) struct ToolContext<'a> {
 /// Everything a tool needs to run one call.
 pub(crate) struct ToolCtx<'a> {
     pub(crate) call: &'a ToolCall,
-    /// The call arguments after PreToolUse hooks ran (a hook may rewrite them).
+    /// The call arguments after `PreToolUse` hooks ran (a hook may rewrite them).
     pub(crate) arguments: serde_json::Value,
     pub(crate) policy: &'a mut Policy,
     /// `sandbox.unsandboxed = true`: run bash without the OS sandbox.
@@ -236,7 +236,7 @@ pub(crate) async fn execute_tool(
     }
 }
 
-/// PLAN 6.5: PreToolUse hooks run before the policy. A hook can deny or
+/// PLAN 6.5: `PreToolUse` hooks run before the policy. A hook can deny or
 /// block the tool, rewrite its input, or emit a warning. Returns a result
 /// when a hook ended the call.
 async fn run_pre_tool_use_hooks(

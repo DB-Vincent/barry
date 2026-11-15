@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 /// BC-1.2 Given a tool call whose name and arguments arrive split across chunks,
-/// when the provider receives it, then one ToolCall is returned with fully
+/// when the provider receives it, then one `ToolCall` is returned with fully
 /// parsed JSON arguments.
 use barry_llm::{Compat, LlmEvent, LlmRequest, OpenAiProvider, Provider};
 use barry_protocol::{Message, StopReason};

@@ -430,7 +430,7 @@ fn sandbox_spec(policy: &Policy) -> SandboxSpec {
 
 /// Run bash inside the OS sandbox with denial-retry support.
 ///
-/// If the sandbox blocks the command (exit_code != 0, stderr contains a
+/// If the sandbox blocks the command (`exit_code != 0`, stderr contains a
 /// sandbox denial message), offer the user a directory grant and retry once
 /// (PLAN 6.2, BC-4.2). If the user denies the grant, the original sandbox
 /// failure goes to the model unchanged.

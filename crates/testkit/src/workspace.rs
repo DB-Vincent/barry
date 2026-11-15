@@ -12,6 +12,11 @@ pub struct Workspace {
 
 #[allow(clippy::new_without_default)]
 impl Workspace {
+    /// Create a temporary workspace with `project`, `outside` and `home` directories.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the temporary directories cannot be created.
     #[must_use]
     pub fn new() -> Self {
         let tempdir = tempfile::tempdir().unwrap();
@@ -65,6 +70,11 @@ impl Workspace {
         self.project.join(rel)
     }
 
+    /// Write `toml_str` to the workspace's `~/.config/barry/config.toml`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the file cannot be written.
     pub fn config(&self, toml_str: &str) {
         let config_dir = self.home.join(".config").join("barry");
         std::fs::create_dir_all(&config_dir).unwrap();

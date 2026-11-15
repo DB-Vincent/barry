@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-/// BC-2.3 A bash command exiting 1 sends the model exit_code: 1 and stderr
+/// BC-2.3 A bash command exiting 1 sends the model `exit_code`: 1 and stderr
 /// with ok:false, and the turn continues to the model's next reply.
 use barry_core::{Agent, Approver, BoxFuture};
 use barry_llm::{LlmEvent, LlmRequest};

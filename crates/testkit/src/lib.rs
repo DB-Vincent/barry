@@ -1,5 +1,5 @@
 //! Test utilities for barry.
-//! Provides Workspace, ScriptedProvider, ScriptedApprover, FakeLlm.
+//! Provides `Workspace`, `ScriptedProvider`, `ScriptedApprover`, `FakeLlm`.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

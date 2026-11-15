@@ -9,7 +9,7 @@ use serde_json::Value;
 use wiremock::matchers;
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-/// A reply that FakeLlm renders as OpenAI SSE.
+/// A reply that `FakeLlm` renders as `OpenAI` SSE.
 #[derive(Debug, Clone)]
 pub enum Reply {
     /// Return streamed text content.
@@ -31,6 +31,11 @@ pub struct FakeLlm {
 }
 
 impl FakeLlm {
+    /// Start the mock server with a script of replies, served in order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the mock server cannot be started.
     pub async fn start(script: Vec<Reply>) -> Self {
         let server = MockServer::start().await;
         let replies = Arc::new(Mutex::new(VecDeque::from(script)));
@@ -93,12 +98,20 @@ impl FakeLlm {
     }
 
     /// Returns the parsed JSON bodies of all requests received so far.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal mutex is poisoned.
     #[must_use]
     pub fn requests(&self) -> Vec<Value> {
         self.requests.lock().unwrap().clone()
     }
 
-    /// Returns the Authorization header of the last request, if any.
+    /// Returns the `Authorization` header of the last request, if any.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal mutex is poisoned.
     #[must_use]
     pub fn last_auth_header(&self) -> Option<String> {
         self.auth_headers.lock().unwrap().last().cloned().flatten()

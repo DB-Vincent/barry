@@ -1,4 +1,4 @@
-//! Hooks (PLAN 6.5): a PreToolUse hook that exits 2 blocks the tool; a hook
+//! Hooks (PLAN 6.5): a `PreToolUse` hook that exits 2 blocks the tool; a hook
 //! returning deny JSON also blocks; an allowing hook lets the policy decide.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -249,7 +249,7 @@ async fn hook_allow_lets_policy_decide() {
     assert_eq!(result, StopReason::Stop);
 }
 
-/// A PreToolUse hook that rewrites the tool input must affect `write`.
+/// A `PreToolUse` hook that rewrites the tool input must affect `write`.
 #[tokio::test]
 async fn hook_updated_input_rewrites_write() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -300,7 +300,7 @@ async fn hook_updated_input_rewrites_write() {
     );
 }
 
-/// A PreToolUse hook that rewrites the tool input must affect `edit`.
+/// A `PreToolUse` hook that rewrites the tool input must affect `edit`.
 #[tokio::test]
 async fn hook_updated_input_rewrites_edit() {
     let dir = tempfile::tempdir().expect("tempdir");

@@ -104,7 +104,7 @@ pub struct Agent {
     session_warned: bool,
     /// Masks secrets in tool output before it reaches the model (#17).
     redactor: Redactor,
-    /// Compiled PreToolUse hooks (PLAN 6.5).
+    /// Compiled `PreToolUse` hooks (PLAN 6.5).
     hooks: Vec<Hook>,
 }
 
@@ -116,6 +116,10 @@ impl Agent {
     /// several agents in one process - sub-agents later, or tests with
     /// different workspaces - do not share whatever directory the process
     /// happens to be in.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError`] if a configured hook fails to compile.
     pub fn new(
         cfg: crate::config::Config,
         provider: Arc<dyn Provider>,
@@ -128,6 +132,10 @@ impl Agent {
     }
 
     /// Build an agent for an explicit working directory and home (#28).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError`] if a configured hook fails to compile.
     pub fn with_paths(
         cfg: crate::config::Config,
         provider: Arc<dyn Provider>,
@@ -212,6 +220,11 @@ impl Agent {
     }
 
     /// Rebuild an agent from a session log (BC-5.5, PLAN 6.7).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::Session`] if the log cannot be read, fails hash-chain
+    /// verification, or cannot be reopened for appending.
     pub fn resume(
         cfg: crate::config::Config,
         provider: Arc<dyn Provider>,
@@ -480,6 +493,11 @@ impl Agent {
     /// An explicit request summarises the whole history, including the current
     /// turn, because the user asked for the context to be reduced. Returns
     /// `true` when the history was replaced.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError`] if the summarisation request fails or the session
+    /// log cannot be written.
     pub async fn compact(&mut self) -> Result<bool, CoreError> {
         if self.history.is_empty() {
             return Ok(false);
@@ -487,6 +505,13 @@ impl Agent {
         self.summarise(0, &CancellationToken::new()).await
     }
 
+    /// Run one user turn: call the model and execute its tool calls until it stops.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::Provider`] if the model stream or a tool executor
+    /// fails, [`CoreError::ChannelClosed`] if the event receiver is dropped, and
+    /// [`CoreError`] if context compaction fails.
     pub async fn run_turn(
         &mut self,
         user_input: &str,

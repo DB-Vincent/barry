@@ -143,6 +143,11 @@ impl Config {
     /// `$BARRY_CONFIG` wins whenever it is set; otherwise the XDG path is
     /// tried (#27). `Ok(None)` means there is no config file, so the built-in
     /// defaults apply; a file that exists but does not parse is an error.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::Io`] if the file cannot be read and
+    /// [`ConfigError::Toml`] if it is not valid TOML.
     pub fn load() -> Result<Option<Self>, ConfigError> {
         match std::env::var("BARRY_CONFIG") {
             Ok(path) => Self::load_from(Path::new(&path)),
@@ -154,6 +159,11 @@ impl Config {
     }
 
     /// Load from an explicit path. A missing file is not an error.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::Io`] if the file cannot be read and
+    /// [`ConfigError::Toml`] if it is not valid TOML.
     pub fn load_from(path: &Path) -> Result<Option<Self>, ConfigError> {
         if !path.exists() {
             return Ok(None);

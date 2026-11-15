@@ -36,6 +36,11 @@ impl ScriptedProvider {
         }
     }
 
+    /// The requests the provider has received so far.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal mutex is poisoned.
     pub fn seen_requests(&self) -> Vec<LlmRequest> {
         self.requests.lock().unwrap().clone()
     }
@@ -115,6 +120,11 @@ impl ScriptedApprover {
         }
     }
 
+    /// The approval requests asked so far.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal mutex is poisoned.
     pub fn asked(&self) -> Vec<ApprovalRequest> {
         self.asked.lock().unwrap().clone()
     }

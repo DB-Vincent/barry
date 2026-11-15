@@ -5,6 +5,8 @@
 //! filter then execs the requested command.
 //!
 //! bwrap arguments:
+//!
+//! ```text
 //!   bwrap --ro-bind / / --dev /dev --proc /proc
 //!         --bind <root> <root>           (each writable root)
 //!         --ro-bind <p> <p>              (each protected_ro path that exists)
@@ -16,6 +18,7 @@
 //!         [--unshare-net if !network]
 //!         --die-with-parent --new-session --chdir <cwd>
 //!         -- <barry_exe> __sandbox-exec -- /bin/sh -c <cmd>
+//! ```
 
 use std::collections::BTreeMap;
 use std::convert::TryInto;
@@ -170,7 +173,7 @@ fn helper_exe() -> Result<PathBuf, SandboxError> {
 /// Build the inner shell command that runs under `env -i` to strip secrets.
 ///
 /// The outer `/bin/sh -c` (passed by the sandbox helper) runs this, which
-/// clears the environment and sets only PATH, HOME, USER, LANG, LC_ALL, TERM,
+/// clears the environment and sets only PATH, HOME, USER, LANG, `LC_ALL`, TERM,
 /// TMPDIR before executing the user's command.
 fn build_sandbox_env(shell_command: &str) -> String {
     let mut env = String::from("env -i");
@@ -222,7 +225,10 @@ fn which_bwrap() -> Result<PathBuf, SandboxError> {
 }
 
 /// The sandbox helper entry point. Invoked as:
-///   barry __sandbox-exec -- /bin/sh -c <cmd>
+///
+/// ```text
+/// barry __sandbox-exec -- /bin/sh -c <cmd>
+/// ```
 ///
 /// Installs a seccomp filter then runs the command. The seccomp filter is
 /// inherited by the child process.
