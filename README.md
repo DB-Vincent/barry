@@ -78,7 +78,7 @@ Running `barry` with no `-p` starts a minimal line REPL in the current working d
 
 ## Configuration
 
-User config is read from the file named by `$BARRY_CONFIG`; if the variable is unset or the file does not exist, built-in defaults apply. Supported keys today:
+User config is read from the file named by `$BARRY_CONFIG`; when that variable is unset, `$XDG_CONFIG_HOME/barry/config.toml` (or `~/.config/barry/config.toml`) is used. If no file exists, built-in defaults apply. `barry config show` prints the configuration in effect and the file it came from. Supported keys today:
 
 ```toml
 [sandbox]
@@ -141,7 +141,7 @@ Implemented so far:
 
 - `barry --version` — prints `barry <semver>` and exits 0
 - `barry rules check "<command>"` — prints the policy decision and the deciding rule id
-- Config loading from `$BARRY_CONFIG` with clean error messages (exit 2 on malformed config, no backtrace)
+- `barry config show` — prints the effective config (path defaults, network, redaction, rules, hooks) and the file it came from
 - Streaming OpenAI-compatible client and the agent loop with `read`, `write`, `edit` and `bash` (sub-agents, and their tool, arrive in M8)
 - Interactive REPL with streaming output, tool lines, stdin approvals, `/exit`, `/grants`, `/model` and Ctrl-C cancellation (`/compact` is a stub until M6)
 - Headless `-p` mode with `--json`, wrapped tool results and the PLAN 5.2 system prompt
