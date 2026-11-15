@@ -214,7 +214,7 @@ pub(crate) fn record_decision(
             decision: decision_label(decision),
             decided_by: decided_by_label(decided_by),
         })
-        .map_err(|err| CoreError::Session(err.to_string()))
+        .map_err(CoreError::Session)
 }
 
 /// What the model is told when an approval is refused. A user refusal keeps
@@ -235,7 +235,7 @@ pub(crate) fn record_grant(log: &mut Option<&mut SessionLog>, dir: &Path) -> Res
         .append(EntryKind::Grant {
             dir: dir.display().to_string(),
         })
-        .map_err(|err| CoreError::Session(err.to_string()))
+        .map_err(CoreError::Session)
 }
 
 /// Record a bash prefix approval as soon as the user approves it.
@@ -250,7 +250,7 @@ pub(crate) fn record_prefix(
         .append(EntryKind::PrefixApproved {
             prefix: prefix.to_string(),
         })
-        .map_err(|err| CoreError::Session(err.to_string()))
+        .map_err(CoreError::Session)
 }
 
 /// One tool the model can call.

@@ -80,9 +80,11 @@ impl Hook {
                 config.matcher
             )));
         }
-        let regex = regex::Regex::new(&config.matcher).map_err(|e| {
-            CoreError::Config(format!("invalid hook matcher {:?}: {e}", config.matcher))
-        })?;
+        let regex =
+            regex::Regex::new(&config.matcher).map_err(|source| CoreError::HookMatcher {
+                matcher: config.matcher.clone(),
+                source,
+            })?;
         Ok(Self { config, regex })
     }
 
@@ -108,7 +110,7 @@ impl Hook {
             input: Some(input),
             result: None,
         })
-        .map_err(|e| CoreError::Config(format!("failed to serialize hook input: {e}")))?;
+        .map_err(CoreError::HookInput)?;
 
         let Some((program, args)) = self.config.command.split_first() else {
             // `Hook::new` rejects an empty command, but stay panic-free here too.

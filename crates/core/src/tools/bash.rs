@@ -320,8 +320,7 @@ async fn execute_bash_sandboxed(
     timeout_secs: u64,
     cancel: &CancellationToken,
 ) -> Result<ToolResult, CoreError> {
-    let cmd = sandbox::command(&spec, command)
-        .map_err(|e| CoreError::Provider(format!("sandbox error: {e}")))?;
+    let cmd = sandbox::command(&spec, command).map_err(CoreError::Sandbox)?;
     run_bash_command(cmd, timeout_secs, cancel).await
 }
 
@@ -524,7 +523,7 @@ async fn run_bash(
         ApprovalChoice::Once | ApprovalChoice::AlwaysThisSession => {
             ctx.grants
                 .grant_dir(ctx.policy, &target_dir)
-                .map_err(|e| CoreError::Provider(format!("failed to grant directory: {e}")))?;
+                .map_err(CoreError::Policy)?;
             record_grant(log, &target_dir)?;
             let mut second = execute_bash_sandboxed(
                 sandbox_spec(ctx.policy, ctx.grants),
