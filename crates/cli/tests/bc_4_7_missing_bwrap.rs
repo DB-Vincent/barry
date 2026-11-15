@@ -21,12 +21,13 @@ async fn bc_4_7_missing_bwrap_fails_closed() {
     let dir = tempfile::tempdir().expect("tempdir");
     let marker = dir.path().join("marker");
 
-    // `echo x | tee marker` passes the rule layer (both segments are allowed)
-    // and would create `marker` if it ran. With no bwrap on PATH it must not.
+    // `echo x > marker` passes the rule layer (echo is allow-listed and the
+    // redirect target is inside cwd) and would create `marker` if it ran. With
+    // no bwrap on PATH it must not.
     let llm = FakeLlm::start(vec![
         Reply::Tool {
             name: "bash".to_string(),
-            arguments: json!({ "command": "echo x | tee marker" }),
+            arguments: json!({ "command": "echo x > marker" }),
         },
         Reply::Text {
             content: "could not run the command".to_string(),

@@ -6,6 +6,8 @@ edition = "2021"
 [dependencies]
 barry-protocol = { workspace = true }
 thiserror = { workspace = true }
+tree-sitter = { workspace = true }
+tree-sitter-bash = { workspace = true }
 
 [dev-dependencies]
 barry-testkit = { workspace = true }
