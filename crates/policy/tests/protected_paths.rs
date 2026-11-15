@@ -1,5 +1,7 @@
 //! Protected paths (issue #16): every protected name is collected under every
 //! writable root, including nested repositories, not just `cwd/.git`.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use barry_policy::{Policy, PolicyConfig};
 use barry_testkit::Workspace;
 use std::path::{Path, PathBuf};

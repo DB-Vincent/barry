@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-4.5 Writing `.git/config` from bash fails inside the sandbox unless
 /// `.git` has been granted.
 use barry_core::config::Config;

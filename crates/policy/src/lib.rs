@@ -4,8 +4,6 @@
 //! decisions for bash commands. Path canonicalisation rejects `..` and
 //! resolves symlinks (PLAN 6.1.1, BC-3.5).
 
-#![forbid(unsafe_code)]
-
 mod bash_parse;
 mod path;
 

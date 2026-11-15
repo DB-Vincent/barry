@@ -162,7 +162,8 @@ fn helper_exe() -> Result<PathBuf, SandboxError> {
     }
 
     Err(SandboxError::Other(format!(
-        "cannot find the barry helper binary (looked next to {exe:?})"
+        "cannot find the barry helper binary (looked next to {})",
+        exe.display()
     )))
 }
 

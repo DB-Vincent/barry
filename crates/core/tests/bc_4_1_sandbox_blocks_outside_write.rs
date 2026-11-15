@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-4.1 `echo x > ../outside/f` run by bash does not create the file, even
 /// though the rule layer asked and the user approved it "once" without a
 /// grant. This proves the sandbox is a separate layer from policy.

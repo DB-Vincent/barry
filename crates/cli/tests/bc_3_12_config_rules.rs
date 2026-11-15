@@ -1,5 +1,7 @@
 //! BC-3.12 with rules from the config file (issue #18): `[[rule]]` entries are
 //! loaded and decide for `barry rules check`, including malformed ones.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use predicates::prelude::*;
 
 fn barry() -> assert_cmd::Command {

@@ -3,6 +3,8 @@
 //! BC-5.3 keeps the default: the model gets the real tool output and only the
 //! session log is redacted. With `redaction.tool_output = true` the model sees
 //! `[REDACTED]` instead, which is what a remote provider needs.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use barry_core::config::Config;
 use barry_core::Agent;
 use barry_policy::{Policy, PolicyConfig};

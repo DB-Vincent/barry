@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// Regression test for the dangling-symlink escape.
 ///
 /// `Path::exists` follows links, so a dangling symlink used to look like a

@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-4.8 Files created in cwd by bash are visible on the host afterwards,
 /// so normal work still functions.
 use barry_testkit::{FakeLlm, Reply};

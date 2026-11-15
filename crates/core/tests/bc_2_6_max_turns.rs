@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-2.6 A model that keeps calling tools stops after max_turns, and the
 /// user gets a "turn limit reached" notice.
 use barry_core::config::Config;

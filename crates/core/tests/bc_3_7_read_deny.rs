@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-3.7 Reading `~/.ssh/id_test` is refused without a prompt, and the
 /// model never receives `FAKE-PRIVATE-KEY`. Reading a normal file outside
 /// cwd is allowed.

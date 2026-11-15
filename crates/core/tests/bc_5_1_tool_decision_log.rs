@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-5.1 Every tool call produces a `tool_decision` entry recording who
 /// decided (rule id, user or hook) and a `tool_result` entry.
 use barry_core::config::Config;

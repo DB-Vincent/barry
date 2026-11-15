@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-2.11 The tool list sent to the model contains exactly
 /// `read, write, edit, bash` — the agent tool stays hidden until sub-agents
 /// exist (#33) — and the system prompt matches the approved snapshot (insta).

@@ -1,5 +1,7 @@
 //! BC-6.4 / #22 When compaction cannot reduce the context any further, the
 //! turn stops with `ContextFull` instead of sending a request that overflows.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use barry_core::{Agent, Approver, BoxFuture};
 use barry_llm::{LlmEvent, LlmRequest, Provider};
 use barry_protocol::{ApprovalChoice, ApprovalRequest, Event, Message, StopReason};

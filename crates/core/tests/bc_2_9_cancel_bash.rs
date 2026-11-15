@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-2.9 Cancelling during a long bash command kills it. The history stays
 /// valid: the next run_turn succeeds, and the model sees an "interrupted by
 /// user" tool result.

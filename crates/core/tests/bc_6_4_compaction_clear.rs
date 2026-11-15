@@ -2,6 +2,8 @@
 //! outputs are cleared first, then only the turns before the newest ones are
 //! summarised. The request being answered and its pending tool calls stay
 //! verbatim, and an empty summary never replaces the context (#21).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use barry_core::{Agent, Approver, BoxFuture};
 use barry_llm::{LlmEvent, LlmRequest, Provider};
 use barry_protocol::{ApprovalChoice, ApprovalRequest, Message, StopReason, ToolCall};

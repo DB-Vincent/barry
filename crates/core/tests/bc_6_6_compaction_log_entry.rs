@@ -1,5 +1,7 @@
 //! BC-6.6 After compaction the session log still contains the original
 //! messages, plus a `compaction` entry describing what was replaced.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use barry_core::config::Config;
 use barry_core::session::SessionLog;
 use barry_core::{Agent, Approver, BoxFuture};

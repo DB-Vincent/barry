@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// M4 bash runs inside the OS sandbox when a policy is configured, and
 /// unsandboxed when no policy is present. The sandbox helper re-executes the
 /// barry binary, so sandboxed execution is tested via integration tests

@@ -1,5 +1,7 @@
 //! #27 The config is found without `$BARRY_CONFIG`, and `barry config show`
 //! reports the configuration actually in effect.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use predicates::prelude::PredicateBooleanExt;
 use std::path::{Path, PathBuf};
 

@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// Regression test: "once" is once.
 ///
 /// Both the bash and the write approval paths used to treat `Once` exactly

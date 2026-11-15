@@ -2,6 +2,7 @@
 //! "bubblewrap not found" error, and the command does not run at all (a marker
 //! file is not created).
 #![cfg(target_os = "linux")]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use barry_testkit::{FakeLlm, Reply};
 use serde_json::json;

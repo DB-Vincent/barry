@@ -4,6 +4,8 @@
 //! The tool result is what the model sees, so the distinction is observable:
 //! before this, writing under a path that is really a file said
 //! "provider error", which reads as if the LLM endpoint had failed.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use barry_core::config::Config;
 use barry_core::Agent;
 use barry_policy::{Policy, PolicyConfig};

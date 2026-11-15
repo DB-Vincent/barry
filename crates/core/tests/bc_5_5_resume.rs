@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-5.5 After `--resume`, the first request to the model contains the
 /// earlier conversation.
 use barry_core::config::Config;

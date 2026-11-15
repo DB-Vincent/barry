@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// Regression test: a dangling symlink inside cwd must not let `write`
 /// escape it.
 ///

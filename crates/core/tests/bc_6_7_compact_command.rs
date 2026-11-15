@@ -1,5 +1,7 @@
 //! BC-6.7 `/compact` forces compaction of the conversation context (exercised
 //! via `Agent::compact`, which the REPL `/compact` command calls).
+
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use barry_core::config::Config;
 use barry_core::session::SessionLog;
 use barry_core::{Agent, Approver, BoxFuture};

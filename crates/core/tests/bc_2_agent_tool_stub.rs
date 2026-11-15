@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// PLAN 5.1 lists `agent` as one of the five tools, and BC-2.11 requires the
 /// advertised list to contain exactly read, write, edit, bash, agent. The
 /// sub-agent itself is PLAN 6.6 (M8), so until then the tool must exist and

@@ -1,6 +1,8 @@
 //! PLAN 6.4 / #23 The compaction estimate uses the token usage the provider
 //! reports, so a context that is over the window is compacted even when the
 //! message bytes alone look small.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use barry_core::{Agent, Approver, BoxFuture};
 use barry_llm::{LlmEvent, LlmRequest, Provider};
 use barry_protocol::{

@@ -1,8 +1,6 @@
 //! Core types for the barry agent harness.
 //! Types only — no logic, no I/O.
 
-#![forbid(unsafe_code)]
-
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 

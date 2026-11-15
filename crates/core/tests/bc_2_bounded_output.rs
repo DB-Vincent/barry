@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-2.5 / #19 Neither `read` nor `bash` buffers more output than it can show.
 ///
 /// A file larger than the read window comes back as numbered head + marker +

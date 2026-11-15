@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-3.2 Writing a file outside cwd asks for approval. If the user denies,
 /// the file is not created and the model is told "denied by user".
 use barry_core::config::Config;

@@ -5,6 +5,8 @@
 //! PreToolUse hook was told the process cwd rather than the agent's. Both are
 //! observable: the request the model receives names its workspace, and the
 //! hook payload carries the cwd.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use barry_core::config::{Config, HookConfig};
 use barry_core::Agent;
 use barry_llm::LlmRequest;

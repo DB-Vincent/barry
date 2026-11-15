@@ -14,6 +14,7 @@ use serde_json::Value;
 /// The built-in secret patterns, compiled once. `Regex::new` only fails on a
 /// syntax error, and a constant pattern is covered by the redaction tests, so
 /// this is a constant expression rather than a runtime error path (#44).
+#[allow(clippy::expect_used, reason = "patterns are compile-time literals")]
 static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     [
         r"sk-[A-Za-z0-9_-]{20,}",

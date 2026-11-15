@@ -7,6 +7,7 @@
 //! does not exist yet cannot be denied there, and macOS protects an existing
 //! read-deny entry instead.
 #![cfg(target_os = "linux")]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use barry_core::config::Config;
 use barry_core::Agent;

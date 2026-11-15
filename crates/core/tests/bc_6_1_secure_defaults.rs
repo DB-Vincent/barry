@@ -1,5 +1,7 @@
 //! BC-6.1 / #10 The defaults deny instead of allowing: credential directories
 //! are read-denied, protected path components ask, and bash has no network.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use barry_core::config::Config;
 use barry_policy::{Policy, PolicyConfig};
 use barry_protocol::Decision;

@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-2.8 An unknown tool name sends the model an ok:false result "unknown tool".
 ///
 /// The behaviour already exists (the catch-all arm in `tools::execute_tool`);

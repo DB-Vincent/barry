@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// Regression tests for `Policy::grant_dir` path resolution.
 ///
 /// A grant is explicit user permission, so `..` is resolved rather than

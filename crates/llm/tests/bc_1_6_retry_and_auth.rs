@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-1.6 A 429 followed by a success completes normally. A 401 gives an
 /// auth error naming the provider, and the error text does not contain the
 /// API key.

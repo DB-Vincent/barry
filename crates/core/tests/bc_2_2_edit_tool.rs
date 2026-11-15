@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-2.2 `edit` with a unique `old_string` changes the file.
 /// With a non-unique one the file is unchanged and the model is told
 /// how many matches there were.

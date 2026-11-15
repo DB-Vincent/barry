@@ -2,6 +2,8 @@
 //!
 //! The parser used to read the TOML by hand, so `read_denny = [...]` looked
 //! like no setting at all and the credential paths were quietly unprotected.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use predicates::prelude::*;
 
 fn barry() -> assert_cmd::Command {

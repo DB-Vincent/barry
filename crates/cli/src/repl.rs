@@ -39,12 +39,14 @@ impl ReplApprover {
         }
     }
 
+    #[allow(clippy::expect_used, reason = "a poisoned lock is unrecoverable")]
     fn set_cancel(&self, cancel: &CancellationToken) {
         *self.cancel.lock().expect("approval lock") = cancel.clone();
     }
 }
 
 impl Approver for ReplApprover {
+    #[allow(clippy::expect_used, reason = "a poisoned lock is unrecoverable")]
     fn decide(&self, req: &ApprovalRequest) -> BoxFuture<'_, ApprovalChoice> {
         let cancel = self.cancel.lock().expect("approval lock").clone();
         let input = self.input.clone();

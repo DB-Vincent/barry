@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-4.2 When a bash write is denied by the sandbox, the user is offered a
 /// grant for that directory. After approval the command is retried and
 /// succeeds. After denial the original failure goes to the model.

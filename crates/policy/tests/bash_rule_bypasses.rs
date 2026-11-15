@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// Table tests for the bash rule layer (issue #9).
 ///
 /// The layer used to match substrings, so `env bash -c ...`, `ls\nrm x`,

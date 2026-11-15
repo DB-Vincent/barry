@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// Regression tests for session approvals.
 ///
 /// "Once" means once: it must not leave a grant behind. "Always this session"

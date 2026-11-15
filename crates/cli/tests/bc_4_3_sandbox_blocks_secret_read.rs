@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-4.3 `cat ~/.ssh/id_test` in bash fails, and the model never receives
 /// `FAKE-PRIVATE-KEY`.
 use barry_testkit::{FakeLlm, Reply};
