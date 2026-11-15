@@ -1,7 +1,9 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
+use barry_core::Agent;
 /// BC-3.9 After "always this session" on a bash command, the same command
 /// prefix runs without asking in the same session. A new session asks again.
 use barry_core::config::Config;
-use barry_core::Agent;
 use barry_llm::{LlmEvent, LlmRequest};
 use barry_policy::{Policy, PolicyConfig};
 use barry_protocol::{Message, StopReason};
@@ -105,13 +107,16 @@ async fn bc_3_9_bash_always_this_session_persists_in_session() {
             max_turns: 10,
             context_window: 32_768,
             sandbox_network: true,
+            sandbox_unsandboxed: false,
+            redact_tool_output: false,
             fs_read_deny: vec![],
             fs_protected: vec![],
+            rules: vec![],
             hooks: vec![],
         },
         provider.clone(),
         approver.clone(),
-        Some(policy),
+        policy,
     )
     .expect("agent constructs");
 
@@ -180,13 +185,16 @@ async fn bc_3_9_bash_always_this_session_persists_in_session() {
             max_turns: 10,
             context_window: 32_768,
             sandbox_network: true,
+            sandbox_unsandboxed: false,
+            redact_tool_output: false,
             fs_read_deny: vec![],
             fs_protected: vec![],
+            rules: vec![],
             hooks: vec![],
         },
         provider2.clone(),
         approver2,
-        Some(policy2),
+        policy2,
     )
     .expect("agent constructs");
 

@@ -6,12 +6,14 @@
 //! dependency), and renders them under `# Skills`. Skill bodies are never
 //! included in the prompt.
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 /// Build the skills section for the system prompt.
 ///
 /// `global_skills` is `~/.config/barry/skills` and `project_skills` is
 /// `<git root>/.barry/skills`. Directories that do not exist are skipped.
+#[must_use]
 pub fn skills_section(global_skills: &Path, project_skills: &Path) -> String {
     let mut skills: Vec<(String, String, PathBuf)> = Vec::new(); // (name, description, path)
 
@@ -24,7 +26,7 @@ pub fn skills_section(global_skills: &Path, project_skills: &Path) -> String {
 
     let mut out = String::from("# Skills\nRead a skill's file with the read tool when relevant:\n");
     for (name, description, path) in skills {
-        out.push_str(&format!("- {name}: {description} ({})\n", path.display()));
+        let _ = writeln!(out, "- {name}: {description} ({})", path.display());
     }
     out
 }

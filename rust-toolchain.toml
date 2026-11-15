@@ -1,3 +1,7 @@
+# Pinned on purpose (#40): a new Rust release can add a clippy lint that CI's
+# -D warnings turns into a build failure, with no code change behind it. Bump
+# this line deliberately, and CI installs whatever it names.
 [toolchain]
-channel = "stable"
+channel = "1.100.0"
 profile = "minimal"
+components = ["rustfmt", "clippy"]

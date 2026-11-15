@@ -1,8 +1,6 @@
 //! Core types for the barry agent harness.
 //! Types only — no logic, no I/O.
 
-#![forbid(unsafe_code)]
-
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -61,6 +59,9 @@ pub enum StopReason {
     ToolCalls,
     ContentFilter,
     Aborted,
+    /// The context could not be reduced any further, so the turn stopped
+    /// instead of sending a request that would overflow (#22).
+    ContextFull,
     Error(String),
 }
 

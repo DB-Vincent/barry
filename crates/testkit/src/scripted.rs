@@ -28,6 +28,7 @@ pub struct ScriptedProvider {
 }
 
 impl ScriptedProvider {
+    #[must_use]
     pub fn new(replies: Vec<Reply>) -> Self {
         Self {
             replies: Mutex::new(replies.into()),
@@ -35,6 +36,11 @@ impl ScriptedProvider {
         }
     }
 
+    /// The requests the provider has received so far.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal mutex is poisoned.
     pub fn seen_requests(&self) -> Vec<LlmRequest> {
         self.requests.lock().unwrap().clone()
     }
@@ -98,6 +104,7 @@ pub struct ScriptedApprover {
 }
 
 impl ScriptedApprover {
+    #[must_use]
     pub fn new(choices: Vec<ApprovalChoice>) -> Self {
         Self {
             choices: Mutex::new(choices.into()),
@@ -105,6 +112,7 @@ impl ScriptedApprover {
         }
     }
 
+    #[must_use]
     pub fn none() -> Self {
         Self {
             choices: Mutex::new(VecDeque::new()),
@@ -112,6 +120,11 @@ impl ScriptedApprover {
         }
     }
 
+    /// The approval requests asked so far.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal mutex is poisoned.
     pub fn asked(&self) -> Vec<ApprovalRequest> {
         self.asked.lock().unwrap().clone()
     }

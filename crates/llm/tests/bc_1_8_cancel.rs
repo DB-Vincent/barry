@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-1.8 Cancelling mid-stream yields Aborted within 200 ms, with the
 /// partial text kept.
 use barry_llm::{Compat, LlmEvent, LlmRequest, OpenAiProvider, Provider};
@@ -38,7 +40,7 @@ async fn slow_sse_server(delay_ms: u64) -> String {
         tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
         let _ = socket.write_all(b"data: [DONE]\n\n").await;
     });
-    format!("http://{}", addr)
+    format!("http://{addr}")
 }
 
 #[tokio::test]
@@ -96,7 +98,6 @@ async fn bc_1_8_cancel_mid_stream_is_aborted_with_partial_text() {
     assert_eq!(stop, StopReason::Aborted);
     assert!(
         elapsed.as_millis() < 200,
-        "abort took {:?}, expected < 200 ms",
-        elapsed
+        "abort took {elapsed:?}, expected < 200 ms"
     );
 }

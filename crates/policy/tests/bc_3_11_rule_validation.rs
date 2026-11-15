@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-3.11 A config rule whose `match` example does not match makes startup
 /// fail, with a message naming the rule id.
 use barry_policy::{Decision, Policy, PolicyConfig};

@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-5.2 `barry log verify` on an untouched log prints `ok` and exits 0.
 /// After one byte of any line is edited, it reports that line and exits 1.
 use barry_core::session::{EntryKind, SessionLog};
@@ -48,7 +50,10 @@ fn bc_5_2_verify_names_the_edited_line() {
     // Edit exactly one byte of the second line, keeping its length: change
     // "second" to "seconD". The log must name line 2.
     let content = std::fs::read_to_string(&path).expect("read log");
-    let mut lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+    let mut lines: Vec<String> = content
+        .lines()
+        .map(std::string::ToString::to_string)
+        .collect();
     assert_eq!(lines.len(), 2, "two entries were written");
     let tampered = lines[1].replacen("second", "seconD", 1);
     assert_ne!(tampered, lines[1], "the edit actually changed line 2");

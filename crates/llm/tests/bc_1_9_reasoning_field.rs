@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-1.9 With `reasoning_field = "reasoning"`, deltas in that field arrive
 /// as `ReasoningDelta` and never as text.
 use barry_llm::{Compat, LlmEvent, LlmRequest, OpenAiProvider, Provider};
