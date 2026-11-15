@@ -1,8 +1,6 @@
 //! Core types for the barry agent harness.
 //! Types only — no logic, no I/O.
 
-#![forbid(unsafe_code)]
-
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -52,14 +50,33 @@ pub struct ToolSpec {
     pub parameters: serde_json::Value,
 }
 
+/// Which run budget was exceeded.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum BudgetKind {
+    /// Total input plus output tokens.
+    Tokens,
+    /// Estimated cost in USD.
+    Cost,
+    /// Wall-clock time since the run started.
+    WallClock,
+    /// Cumulative time spent running bash commands.
+    BashTime,
+}
+
 /// Why the model stopped generating.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[non_exhaustive]
 pub enum StopReason {
     Stop,
     Length,
     ToolCalls,
     ContentFilter,
     Aborted,
+    /// A configured run budget was exceeded; the run stopped on purpose.
+    BudgetExceeded(BudgetKind),
+    /// The context could not be reduced any further, so the turn stopped
+    /// instead of sending a request that would overflow (#22).
+    ContextFull,
     Error(String),
 }
 
@@ -70,8 +87,26 @@ pub struct Usage {
     pub output_tokens: u64,
 }
 
+/// The final report of a headless run, for CI and orchestrators.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RunSummary {
+    pub stop_reason: StopReason,
+    /// The process exit code this run ends with.
+    pub exit_code: u8,
+    /// Whether the run stopped because it hit the turn limit.
+    pub turn_limit_reached: bool,
+    /// Tool calls refused by policy, a hook, or the approver.
+    pub denied_actions: u64,
+    /// Token usage summed over the run, when the provider reported it.
+    pub usage: Option<Usage>,
+    /// Absolute paths changed through the write and edit tools. Changes made
+    /// by bash commands are not tracked.
+    pub files_changed: Vec<PathBuf>,
+}
+
 /// The policy decision for a tool or command.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[non_exhaustive]
 pub enum Decision {
     Allow,
     Ask { reason: String },
@@ -80,6 +115,7 @@ pub enum Decision {
 
 /// Who made the decision.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[non_exhaustive]
 pub enum DecidedBy {
     Rule(String),
     User,
@@ -103,10 +139,16 @@ pub struct ApprovalRequest {
     pub summary: String,
     pub reason: String,
     pub grant_path: Option<PathBuf>,
+    /// The bash command, for a `bash` request. Lets a non-interactive approver
+    /// match on the command itself instead of parsing `summary`.
+    pub command: Option<String>,
+    /// The path as the model gave it, for a `write` or `edit` request.
+    pub path: Option<PathBuf>,
 }
 
 /// Events emitted by the core agent loop to the front end.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[non_exhaustive]
 pub enum Event {
     TurnStarted,
     TextDelta(String),
@@ -127,4 +169,6 @@ pub enum Event {
         stop: StopReason,
         usage: Option<Usage>,
     },
+    /// The last event of a headless `--json` run.
+    RunSummary(RunSummary),
 }

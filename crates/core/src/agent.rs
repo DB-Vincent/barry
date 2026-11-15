@@ -1,27 +1,80 @@
 //! The turn loop: request, stream, dispatch tools, feed results back.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use barry_llm::{LlmEvent, LlmRequest, Provider};
-use barry_policy::Policy;
-use barry_protocol::{DecidedBy, Decision, Event, Message, StopReason, ToolCall};
+use barry_policy::{Policy, SessionGrants};
+use barry_protocol::{DecidedBy, Decision, Event, Message, StopReason, ToolCall, Usage};
 use futures::channel::mpsc;
 use futures::sink::SinkExt;
 use futures::stream::StreamExt;
 use tokio_util::sync::CancellationToken;
 
+use crate::budget::{BudgetTracker, Exceeded};
 use crate::config::Config;
 use crate::hooks::Hook;
-use crate::prompt::{system_prompt, PromptContext};
-use crate::session::{self, decided_by_label, decision_label, EntryKind, SessionLog};
-use crate::tools::{execute_tool, tool_specs, ToolResult};
+use crate::prompt::{PromptContext, system_prompt};
+use crate::redact::Redactor;
+use crate::session::{self, EntryKind, SessionLog, decided_by_label, decision_label};
+use crate::tools::{ReadState, ToolContext, ToolResult, execute_tool, tool_specs};
 use crate::{Approver, CoreError};
 
 /// Wraps a tool result for the model (PLAN 5). Kept here rather than in
 /// `tools` because it is a property of the message, not of the tool.
 fn wrap_tool_output(tool: &str, ok: bool, content: &str) -> String {
     format!("<tool_output tool=\"{tool}\" ok=\"{ok}\">\n{content}\n</tool_output>")
+}
+
+/// What one `run_turn` did, for a final report.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RunStats {
+    /// Tool calls refused by policy, a hook, or the approver.
+    pub denied_actions: u64,
+    /// Absolute paths changed through the write and edit tools, sorted.
+    pub files_changed: BTreeSet<PathBuf>,
+    /// Token usage summed over the run, when the provider reported any.
+    pub usage: Option<Usage>,
+}
+
+/// The one-line description shown while a tool runs (#20).
+///
+/// `write` and `edit` carry whole files in their arguments, and echoing those
+/// buries the rest of the session; the path is what the user needs to see. The
+/// other tools keep their arguments, which are short.
+fn tool_display(call: &ToolCall) -> String {
+    if matches!(call.name.as_str(), "write" | "edit")
+        && let Some(path) = call.arguments.get("path").and_then(|p| p.as_str())
+    {
+        return format!("{} {path}", call.name);
+    }
+    format!("{} {}", call.name, call.arguments)
+}
+
+/// The user message that asks for a summary (PLAN 6.4, step 2).
+const SUMMARISE_PROMPT: &str = "Summarise the conversation so far for continuing the task: goals, \
+    decisions, files changed, current state, open problems. Be concise.";
+
+/// How many of the newest user turns compaction leaves untouched (#21).
+///
+/// Summarising them away would drop the request being answered and the tool
+/// results it depends on, leaving the model to answer something it can no
+/// longer see.
+const KEEP_RECENT_TURNS: usize = 2;
+
+/// Compactions allowed in one `run_turn` (PLAN 6.4).
+const MAX_COMPACTIONS_PER_TURN: u64 = 3;
+
+/// What `maybe_compact` did to the context.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompactOutcome {
+    /// The estimate is under the threshold; nothing to do.
+    Fits,
+    /// The history was reduced and the request can be sent.
+    Compacted,
+    /// The context is over the threshold and cannot be reduced any further.
+    ContextFull,
 }
 
 /// The main agent that drives the turn loop.
@@ -34,38 +87,90 @@ pub struct Agent {
     pub(crate) cfg: Config,
     provider: Arc<dyn Provider>,
     pub(crate) approver: Arc<dyn Approver>,
-    policy: Option<Policy>,
+    /// Always present (#30): a missing policy used to mean "unsandboxed bash,
+    /// unrestricted writes", which is not a mode any run should reach by
+    /// accident. Immutable after construction.
+    policy: Policy,
+    /// Approvals given during this session, passed alongside the policy.
+    grants: SessionGrants,
+    /// `sandbox.unsandboxed = true`: bash runs without the OS sandbox (#30).
+    unsandboxed: bool,
     history: Vec<Message>,
+    /// Working directory this agent works in (#28), captured once instead of
+    /// asking the process during a turn.
+    cwd: PathBuf,
     /// Built once so every request carries the same prefix (PLAN 5.2).
     system_prompt: String,
     /// Context window (tokens) used for compaction heuristics.
     context_window: u64,
     /// Number of compactions performed in the current `run_turn` (PLAN 6.4).
     compactions: u64,
+    /// Usage the provider reported for the last response (#23).
+    last_usage: Option<Usage>,
+    /// Input tokens the provider reported for the last response (#23).
+    last_input_tokens: u64,
+    /// Output tokens the provider reported for the last response.
+    last_output_tokens: u64,
+    /// History size at the moment that response arrived.
+    bytes_at_response: u64,
     /// Audit log, when a session is being recorded (PLAN 6.7).
     session: Option<SessionLog>,
     /// Whether a session-log write failure has already been reported.
     session_warned: bool,
-    /// Compiled PreToolUse hooks (PLAN 6.5).
+    /// Masks secrets in tool output before it reaches the model (#17).
+    redactor: Redactor,
+    /// Compiled `PreToolUse` hooks (PLAN 6.5).
     hooks: Vec<Hook>,
+    /// Totals for the latest `run_turn`.
+    stats: RunStats,
+    /// Budget totals for the current `run_turn`.
+    budget: BudgetTracker,
+    /// Files the model has read or written, for the `edit` stale check.
+    reads: ReadState,
 }
 
 impl Agent {
+    /// Build an agent for the process's working directory and home.
+    ///
+    /// This is the only place that asks the process for either (#28).
+    /// Everything afterwards works from the values stored on the agent, so
+    /// several agents in one process - sub-agents later, or tests with
+    /// different workspaces - do not share whatever directory the process
+    /// happens to be in.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError`] if a configured hook fails to compile.
     pub fn new(
         cfg: crate::config::Config,
         provider: Arc<dyn Provider>,
         approver: Arc<dyn Approver>,
-        policy: Option<Policy>,
+        policy: Policy,
     ) -> Result<Self, CoreError> {
-        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let home = std::env::var("HOME").map_or_else(|_| PathBuf::from("."), PathBuf::from);
+        Self::with_paths(cfg, provider, approver, policy, cwd, home)
+    }
+
+    /// Build an agent for an explicit working directory and home (#28).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError`] if a configured hook fails to compile.
+    pub fn with_paths(
+        cfg: crate::config::Config,
+        provider: Arc<dyn Provider>,
+        approver: Arc<dyn Approver>,
+        policy: Policy,
+        cwd: PathBuf,
+        home: PathBuf,
+    ) -> Result<Self, CoreError> {
         let date = crate::prompt::today();
 
         // PLAN 6.3: assemble the AGENTS.md and skills sections for the prompt.
         let git_root = find_git_root(&cwd);
         let agents_md_section = crate::context::instructions_section(&git_root, &cwd);
-        let global_skills = std::env::var("HOME")
-            .map(|home| PathBuf::from(home).join(".config/barry/skills"))
-            .unwrap_or_else(|_| PathBuf::from(".config/barry/skills"));
+        let global_skills = home.join(".config/barry/skills");
         let project_skills = git_root.join(".barry/skills");
         let skills_section = crate::context::skills_section(&global_skills, &project_skills);
 
@@ -77,7 +182,10 @@ impl Agent {
             skills_section: &skills_section,
         });
 
+        cfg.budgets.validate().map_err(CoreError::Config)?;
+        let budget = BudgetTracker::new(cfg.budgets.clone());
         let context_window = cfg.context_window;
+        let unsandboxed = cfg.sandbox_unsandboxed;
         let hooks: Vec<Hook> = cfg
             .hooks
             .iter()
@@ -89,38 +197,66 @@ impl Agent {
             provider,
             approver,
             policy,
+            grants: SessionGrants::new(),
+            unsandboxed,
+            cwd,
             history: Vec::new(),
             system_prompt,
             context_window,
             compactions: 0,
+            last_usage: None,
+            last_input_tokens: 0,
+            last_output_tokens: 0,
+            bytes_at_response: 0,
             session: None,
             session_warned: false,
+            redactor: Redactor::from_env(),
             hooks,
+            stats: RunStats::default(),
+            budget,
+            reads: ReadState::default(),
         })
     }
 
     /// Attach an audit log and record `session_start` (PLAN 6.7).
+    #[must_use]
     pub fn with_session_log(mut self, mut log: SessionLog) -> Self {
-        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         if let Err(err) = log.append(EntryKind::SessionStart {
-            cwd: cwd.display().to_string(),
+            cwd: self.cwd.display().to_string(),
             model: self.cfg.default_model.clone(),
             barry_version: env!("CARGO_PKG_VERSION").to_string(),
-            policy_sha256: session::policy_fingerprint(self.policy.as_ref()),
+            policy_sha256: session::policy_fingerprint(&self.policy),
         }) {
             self.session_warned = true;
             eprintln!("warning: session log write failed: {err}");
+        }
+        // #30: running without the OS sandbox is a decision, so the audit
+        // trail names it rather than leaving it to be inferred from a missing
+        // policy hash.
+        if self.unsandboxed {
+            eprintln!("warning: sandbox.unsandboxed = true: bash runs without the OS sandbox");
+            if let Err(err) = log.append(EntryKind::Notice {
+                text: "sandbox disabled by config: bash runs without the OS sandbox".to_string(),
+            }) {
+                self.session_warned = true;
+                eprintln!("warning: session log write failed: {err}");
+            }
         }
         self.session = Some(log);
         self
     }
 
     /// Rebuild an agent from a session log (BC-5.5, PLAN 6.7).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::Session`] if the log cannot be read, fails hash-chain
+    /// verification, or cannot be reopened for appending.
     pub fn resume(
         cfg: crate::config::Config,
         provider: Arc<dyn Provider>,
         approver: Arc<dyn Approver>,
-        policy: Option<Policy>,
+        policy: Policy,
         session_file: &Path,
     ) -> Result<Self, CoreError> {
         // Never extend a chain that does not verify: the audit trail is the
@@ -145,11 +281,11 @@ impl Agent {
         let Some(session) = self.session.as_mut() else {
             return;
         };
-        if let Err(err) = session.append(kind) {
-            if !self.session_warned {
-                self.session_warned = true;
-                eprintln!("warning: session log write failed: {err}");
-            }
+        if let Err(err) = session.append(kind)
+            && !self.session_warned
+        {
+            self.session_warned = true;
+            eprintln!("warning: session log write failed: {err}");
         }
     }
 
@@ -167,6 +303,20 @@ impl Agent {
     }
 
     /// Record the outcome after a tool finishes.
+    /// The content a tool result contributes to the model (#17).
+    ///
+    /// Tool output can carry credentials - `cat .env`, a grep over a config
+    /// file - and the provider may be remote. Redaction is opt-in, so the
+    /// default keeps BC-5.3: the model sees the real output, while the session
+    /// log is redacted either way.
+    fn model_tool_content(&self, result: &ToolResult) -> String {
+        if self.cfg.redact_tool_output {
+            self.redactor.redact(&result.content)
+        } else {
+            result.content.clone()
+        }
+    }
+
     fn log_result(&mut self, call: &ToolCall, result: &ToolResult) {
         self.log(EntryKind::ToolResult {
             call_id: call.id.clone(),
@@ -181,9 +331,18 @@ impl Agent {
         self.history.iter().map(message_bytes).sum()
     }
 
-    /// Rough token estimate: bytes / 4 (PLAN 6.4).
+    /// Token estimate for compaction (PLAN 6.4, #23).
+    ///
+    /// The provider reports how many tokens the last request actually cost, so
+    /// that number is used and only the messages added since fall back to the
+    /// bytes / 4 heuristic. Without a report the whole history is estimated.
     fn estimate_tokens(&self) -> u64 {
-        self.history_bytes() / 4
+        let reported = self.last_input_tokens + self.last_output_tokens;
+        if reported == 0 {
+            return self.history_bytes() / 4;
+        }
+        let added = self.history_bytes().saturating_sub(self.bytes_at_response);
+        reported + added / 4
     }
 
     /// Compaction threshold: context window minus a safety reserve.
@@ -224,49 +383,94 @@ impl Agent {
     }
 
     /// Run compaction before building an LLM request (PLAN 6.4).
-    /// Returns `true` if a compaction was performed this turn.
-    async fn maybe_compact(&mut self, events: &mut mpsc::Sender<Event>) -> Result<bool, CoreError> {
+    ///
+    /// Order matters: clearing old tool output is free, a summarisation request
+    /// costs a model round trip, and once neither can bring the estimate under
+    /// the threshold the turn must stop rather than send a request that will
+    /// overflow (#22).
+    async fn maybe_compact(
+        &mut self,
+        cancel: &CancellationToken,
+    ) -> Result<CompactOutcome, CoreError> {
         if self.estimate_tokens() <= self.compaction_threshold() {
-            return Ok(false);
+            return Ok(CompactOutcome::Fits);
         }
 
         // Step 1: clear old tool outputs.
         self.clear_old_tool_outputs();
         if self.estimate_tokens() <= self.compaction_threshold() {
-            return Ok(true);
+            return Ok(CompactOutcome::Compacted);
         }
 
-        // Step 2: summarise (PLAN 6.4, steps 2-3).
-        if self.compactions >= 3 {
-            events
-                .send(Event::Notice("context full".to_string()))
-                .await
-                .map_err(|_| CoreError::ChannelClosed)?;
-            return Ok(false);
+        // Steps 2-3: summarise, but only what is older than the turns the
+        // model still needs (#21).
+        if self.compactions >= MAX_COMPACTIONS_PER_TURN {
+            return Ok(CompactOutcome::ContextFull);
         }
-        self.summarise().await?;
-        self.compactions += 1;
-        Ok(true)
+        if self.summarise(KEEP_RECENT_TURNS, cancel).await? {
+            self.compactions += 1;
+            Ok(CompactOutcome::Compacted)
+        } else {
+            // Nothing old enough to summarise, or no summary came back: there
+            // is no safe way to shrink the context further.
+            Ok(CompactOutcome::ContextFull)
+        }
     }
 
-    /// Send one non-streaming summarisation request and replace the history
-    /// with a single summary user message (PLAN 6.4, step 3).
-    async fn summarise(&mut self) -> Result<(), CoreError> {
+    /// Where the summarised region ends: the index of the `keep_turns`-th most
+    /// recent user turn, or 0 when the history has fewer turns than that.
+    ///
+    /// Cutting at a user message keeps every assistant tool call with its
+    /// results, as PLAN 6.4 requires, and keeps the request being answered and
+    /// its pending tool calls verbatim.
+    fn compaction_split(&self, keep_turns: usize) -> usize {
+        if keep_turns == 0 {
+            return self.history.len();
+        }
+        let starts: Vec<usize> = self
+            .history
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| matches!(m, Message::User { .. }))
+            .map(|(i, _)| i)
+            .collect();
+        if starts.len() <= keep_turns {
+            return 0;
+        }
+        starts[starts.len() - keep_turns]
+    }
+
+    /// Send one non-streaming summarisation request and replace the messages
+    /// before the `keep_turns` newest user turns with a single summary message
+    /// (PLAN 6.4, step 3).
+    ///
+    /// Returns false when there was nothing old enough to summarise or the
+    /// provider returned an empty summary: an empty answer must never wipe the
+    /// context (#21).
+    async fn summarise(
+        &mut self,
+        keep_turns: usize,
+        cancel: &CancellationToken,
+    ) -> Result<bool, CoreError> {
+        let split = self.compaction_split(keep_turns);
+        if split == 0 {
+            return Ok(false);
+        }
+
         let mut messages: Vec<Message> = vec![Message::System {
             content: self.system_prompt.clone(),
         }];
-        messages.extend(self.history.iter().cloned());
+        messages.extend(self.history[..split].iter().cloned());
         messages.push(Message::User {
-            content: "Summarise the conversation so far for continuing the task: goals, \
-                decisions, files changed, current state, open problems. Be concise."
-                .to_string(),
+            content: SUMMARISE_PROMPT.to_string(),
         });
 
         let req = LlmRequest {
             messages,
             tools: vec![],
         };
-        let mut stream = self.provider.stream(req, CancellationToken::new());
+        // Ctrl-C interrupts compaction like any other request (#21).
+        let mut stream = self.provider.stream(req, cancel.clone());
         let mut summary = String::new();
         while let Some(event) = stream.next().await {
             let event = event?;
@@ -284,13 +488,21 @@ impl Agent {
             }
         }
 
-        let mut replaced = Vec::new();
+        if summary.trim().is_empty() {
+            self.log(EntryKind::Notice {
+                text: "compaction skipped: the summary was empty".to_string(),
+            });
+            return Ok(false);
+        }
+
+        let mut replaced = Vec::with_capacity(self.history.len() - split + 1);
         replaced.push(Message::User {
             content: format!("[Summary of earlier conversation]\n{summary}"),
         });
+        replaced.extend(self.history[split..].iter().cloned());
         // PLAN 6.6: raw messages stay in the log; record what was compacted.
         self.log(EntryKind::Compaction {
-            removed_seq_range: [0, self.history.len() as u64],
+            removed_seq_range: [0, split as u64],
             summary: summary.clone(),
         });
         self.history = replaced;
@@ -298,21 +510,58 @@ impl Agent {
         self.log(EntryKind::Notice {
             text: "summarised earlier conversation to save context".to_string(),
         });
-        Ok(())
+        Ok(true)
     }
 
     /// Force compaction of the conversation context (PLAN 6.7 `/compact`).
-    /// Runs the summarisation step if there is anything to compact, replacing
-    /// the history with a single summary message and writing a `compaction`
-    /// log entry. Returns `true` when a compaction was performed.
+    ///
+    /// An explicit request summarises the whole history, including the current
+    /// turn, because the user asked for the context to be reduced. Returns
+    /// `true` when the history was replaced.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError`] if the summarisation request fails or the session
+    /// log cannot be written.
     pub async fn compact(&mut self) -> Result<bool, CoreError> {
         if self.history.is_empty() {
             return Ok(false);
         }
-        self.summarise().await?;
-        Ok(true)
+        self.summarise(0, &CancellationToken::new()).await
     }
 
+    /// End the run because a budget ran out: tell the user, record it, and
+    /// finish the turn with a distinct stop reason.
+    async fn stop_for_budget(
+        &mut self,
+        exceeded: Exceeded,
+        events: &mut mpsc::Sender<Event>,
+    ) -> Result<StopReason, CoreError> {
+        events
+            .send(Event::Notice(exceeded.message.clone()))
+            .await
+            .map_err(|_| CoreError::ChannelClosed)?;
+        self.log(EntryKind::Notice {
+            text: exceeded.message,
+        });
+        let stop = StopReason::BudgetExceeded(exceeded.kind);
+        events
+            .send(Event::TurnFinished {
+                stop: stop.clone(),
+                usage: Some(self.budget.usage()),
+            })
+            .await
+            .map_err(|_| CoreError::ChannelClosed)?;
+        Ok(stop)
+    }
+
+    /// Run one user turn: call the model and execute its tool calls until it stops.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::Provider`] if the model stream or a tool executor
+    /// fails, [`CoreError::ChannelClosed`] if the event receiver is dropped, and
+    /// [`CoreError`] if context compaction fails.
     pub async fn run_turn(
         &mut self,
         user_input: &str,
@@ -327,22 +576,47 @@ impl Agent {
             message: user_message,
         });
 
-        let tools = tool_specs(); // read, write, edit, bash, agent
+        let tools = tool_specs(); // read, glob, grep, ls, write, edit, bash
+        self.budget = BudgetTracker::new(self.cfg.budgets.clone());
+        self.stats = RunStats::default();
 
         for _turn in 0..self.cfg.max_turns {
+            if let Some(exceeded) = self.budget.exceeded() {
+                return self.stop_for_budget(exceeded, &mut events).await;
+            }
             events
                 .send(Event::TurnStarted)
                 .await
                 .map_err(|_| CoreError::ChannelClosed)?;
 
+            // PLAN 6.4: compact the context before building the request. A
+            // context that cannot be reduced stops the turn here: sending the
+            // request would only overflow (#22).
+            if self.maybe_compact(&cancel).await? == CompactOutcome::ContextFull {
+                let notice = "context full".to_string();
+                events
+                    .send(Event::Notice(notice.clone()))
+                    .await
+                    .map_err(|_| CoreError::ChannelClosed)?;
+                self.log(EntryKind::Notice { text: notice });
+                events
+                    .send(Event::TurnFinished {
+                        stop: StopReason::ContextFull,
+                        usage: self.last_usage.clone(),
+                    })
+                    .await
+                    .map_err(|_| CoreError::ChannelClosed)?;
+                return Ok(StopReason::ContextFull);
+            }
+
             let mut messages = Vec::with_capacity(self.history.len() + 1);
-            // PLAN 6.4: compact the context before building the request.
-            self.maybe_compact(&mut events).await?;
             messages.push(Message::System {
                 content: self.system_prompt.clone(),
             });
             messages.extend(self.history.iter().cloned());
 
+            // Used to estimate usage when the provider does not report it.
+            let request_bytes: u64 = messages.iter().map(message_bytes).sum();
             let req = LlmRequest {
                 messages,
                 tools: tools.clone(),
@@ -365,8 +639,36 @@ impl Agent {
                             .await
                             .map_err(|_| CoreError::ChannelClosed)?;
                     }
-                    LlmEvent::Done { message, stop, .. } => {
+                    LlmEvent::Done {
+                        message,
+                        stop,
+                        usage,
+                    } => {
+                        if let Some(usage) = &usage {
+                            let total = self.stats.usage.get_or_insert(Usage {
+                                input_tokens: 0,
+                                output_tokens: 0,
+                            });
+                            total.input_tokens =
+                                total.input_tokens.saturating_add(usage.input_tokens);
+                            total.output_tokens =
+                                total.output_tokens.saturating_add(usage.output_tokens);
+                        }
+                        // Prefer the provider's numbers; otherwise estimate at
+                        // 4 bytes per token so a budget still applies.
+                        self.budget.add_usage(&usage.clone().unwrap_or(Usage {
+                            input_tokens: request_bytes / 4,
+                            output_tokens: message_bytes(&message) / 4,
+                        }));
                         self.history.push(message.clone());
+                        // A reported usage replaces the byte estimate for
+                        // everything up to this response (#23).
+                        if let Some(usage) = usage.clone() {
+                            self.last_input_tokens = usage.input_tokens;
+                            self.last_output_tokens = usage.output_tokens;
+                            self.bytes_at_response = self.history_bytes();
+                        }
+                        self.last_usage = usage;
                         self.log(EntryKind::Message {
                             message: message.clone(),
                         });
@@ -374,7 +676,10 @@ impl Agent {
                         match stop {
                             StopReason::Stop => {
                                 events
-                                    .send(Event::TurnFinished { stop, usage: None })
+                                    .send(Event::TurnFinished {
+                                        stop,
+                                        usage: self.last_usage.clone(),
+                                    })
                                     .await
                                     .map_err(|_| CoreError::ChannelClosed)?;
                                 return Ok(StopReason::Stop);
@@ -384,17 +689,27 @@ impl Agent {
                                     Message::Assistant { tool_calls, .. } => tool_calls.clone(),
                                     _ => Vec::new(),
                                 };
+                                let mut budget_hit: Option<Exceeded> = None;
                                 for call in &tool_calls {
-                                    // Once a cancel lands, the remaining calls are not
-                                    // executed, but each still gets a Tool message: the
-                                    // model rejects a reply whose call ids are not all
-                                    // answered, so the history must stay well formed.
-                                    if cancel.is_cancelled() {
+                                    if budget_hit.is_none() {
+                                        budget_hit = self.budget.exceeded();
+                                    }
+                                    // Once a cancel lands or a budget runs out, the
+                                    // remaining calls are not executed, but each still
+                                    // gets a Tool message: the model rejects a reply
+                                    // whose call ids are not all answered, so the
+                                    // history must stay well formed.
+                                    if cancel.is_cancelled() || budget_hit.is_some() {
+                                        let (why, decided_by) = if cancel.is_cancelled() {
+                                            ("interrupted by user", DecidedBy::User)
+                                        } else {
+                                            ("not run: run budget exceeded", DecidedBy::Default)
+                                        };
                                         events
                                             .send(Event::ToolFinished {
                                                 id: call.id.clone(),
                                                 ok: false,
-                                                display: "interrupted by user".to_string(),
+                                                display: why.to_string(),
                                             })
                                             .await
                                             .map_err(|_| CoreError::ChannelClosed)?;
@@ -402,18 +717,14 @@ impl Agent {
                                         self.log_decision(
                                             call,
                                             Decision::Deny {
-                                                reason: "interrupted by user".to_string(),
+                                                reason: why.to_string(),
                                             },
-                                            DecidedBy::User,
+                                            decided_by,
                                         );
                                         self.log_result(call, &interrupted);
                                         let tool_message = Message::Tool {
                                             tool_call_id: call.id.clone(),
-                                            content: wrap_tool_output(
-                                                &call.name,
-                                                false,
-                                                "interrupted by user",
-                                            ),
+                                            content: wrap_tool_output(&call.name, false, why),
                                             ok: false,
                                         };
                                         self.history.push(tool_message.clone());
@@ -423,7 +734,7 @@ impl Agent {
                                         continue;
                                     }
 
-                                    let display = format!("{} {}", call.name, call.arguments);
+                                    let display = tool_display(call);
                                     events
                                         .send(Event::ToolStarted {
                                             id: call.id.clone(),
@@ -434,17 +745,27 @@ impl Agent {
                                         .map_err(|_| CoreError::ChannelClosed)?;
 
                                     // A tool error is a result, not a turn failure.
-                                    let result = execute_tool(
-                                        call,
-                                        &self.cfg,
-                                        &mut self.policy,
-                                        &self.approver,
-                                        &cancel,
-                                        self.session.as_mut(),
-                                        &self.hooks,
-                                    )
-                                    .await
-                                    .unwrap_or_else(|err| ToolResult::internal_error(&err));
+                                    let mut ctx = ToolContext {
+                                        policy: &mut self.policy,
+                                        grants: &mut self.grants,
+                                        unsandboxed: self.unsandboxed,
+                                        approver: &self.approver,
+                                        cancel: &cancel,
+                                        cwd: &self.cwd,
+                                        hooks: &self.hooks,
+                                        reads: &mut self.reads,
+                                    };
+                                    let result =
+                                        execute_tool(call, &mut ctx, self.session.as_mut())
+                                            .await
+                                            .unwrap_or_else(|err| ToolResult::internal_error(&err));
+                                    self.budget.add_bash(result.bash_time);
+                                    if result.denied {
+                                        self.stats.denied_actions += 1;
+                                    }
+                                    if let Some(path) = &result.changed {
+                                        self.stats.files_changed.insert(path.clone());
+                                    }
 
                                     events
                                         .send(Event::ToolFinished {
@@ -464,7 +785,7 @@ impl Agent {
                                         content: wrap_tool_output(
                                             &call.name,
                                             result.ok,
-                                            &result.content,
+                                            &self.model_tool_content(&result),
                                         ),
                                         ok: result.ok,
                                     };
@@ -478,17 +799,25 @@ impl Agent {
                                     events
                                         .send(Event::TurnFinished {
                                             stop: StopReason::Aborted,
-                                            usage: None,
+                                            usage: self.last_usage.clone(),
                                         })
                                         .await
                                         .map_err(|_| CoreError::ChannelClosed)?;
                                     return Ok(StopReason::Aborted);
                                 }
+                                if let Some(exceeded) =
+                                    budget_hit.or_else(|| self.budget.exceeded())
+                                {
+                                    return self.stop_for_budget(exceeded, &mut events).await;
+                                }
                                 // loop continues: call LLM again with tool results
                             }
                             StopReason::Aborted => {
                                 events
-                                    .send(Event::TurnFinished { stop, usage: None })
+                                    .send(Event::TurnFinished {
+                                        stop,
+                                        usage: self.last_usage.clone(),
+                                    })
                                     .await
                                     .map_err(|_| CoreError::ChannelClosed)?;
                                 return Ok(StopReason::Aborted);
@@ -496,6 +825,8 @@ impl Agent {
                             _ => return Err(CoreError::Provider("unexpected stop reason".into())),
                         }
                     }
+                    // Unknown event kinds (LlmEvent is non-exhaustive) are ignored.
+                    _ => {}
                 }
 
                 if cancel.is_cancelled() {
@@ -515,11 +846,17 @@ impl Agent {
         events
             .send(Event::TurnFinished {
                 stop: StopReason::Stop,
-                usage: None,
+                usage: self.last_usage.clone(),
             })
             .await
             .map_err(|_| CoreError::ChannelClosed)?;
         Ok(StopReason::Stop)
+    }
+
+    /// Totals for the latest `run_turn`: denials, changed files, usage.
+    #[must_use]
+    pub fn run_stats(&self) -> &RunStats {
+        &self.stats
     }
 
     /// The audit log path, when this agent is recording a session.
@@ -528,11 +865,9 @@ impl Agent {
     }
 
     /// Directories granted this session (PLAN 6.9 `/grants`).
+    #[must_use]
     pub fn grants(&self) -> Vec<std::path::PathBuf> {
-        self.policy
-            .as_ref()
-            .map(|policy| policy.grants().to_vec())
-            .unwrap_or_default()
+        self.grants.dirs().to_vec()
     }
 
     /// Replace the provider after `/model` changes the model id. History and
@@ -552,8 +887,8 @@ fn message_bytes(m: &Message) -> u64 {
             reasoning,
             tool_calls,
         } => {
-            let mut n = content.as_ref().map(|s| s.len()).unwrap_or(0);
-            n += reasoning.as_ref().map(|s| s.len()).unwrap_or(0);
+            let mut n = content.as_ref().map_or(0, std::string::String::len);
+            n += reasoning.as_ref().map_or(0, std::string::String::len);
             n += tool_calls
                 .iter()
                 .map(|c| c.arguments.to_string().len())

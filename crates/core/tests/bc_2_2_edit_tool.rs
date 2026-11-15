@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-2.2 `edit` with a unique `old_string` changes the file.
 /// With a non-unique one the file is unchanged and the model is told
 /// how many matches there were.
@@ -65,6 +67,22 @@ fn done_edit(path: &str, old: &str, new: &str) -> LlmEvent {
     }
 }
 
+fn done_read(path: &str) -> LlmEvent {
+    LlmEvent::Done {
+        message: Message::Assistant {
+            content: None,
+            reasoning: None,
+            tool_calls: vec![barry_protocol::ToolCall {
+                id: "call_0".to_string(),
+                name: "read".to_string(),
+                arguments: json!({ "path": path }),
+            }],
+        },
+        stop: StopReason::ToolCalls,
+        usage: None,
+    }
+}
+
 fn done_text(text: &str) -> LlmEvent {
     LlmEvent::Done {
         message: Message::Assistant {
@@ -95,6 +113,8 @@ async fn bc_2_2_edit_unique_match_changes_file() {
     let path = file.to_str().unwrap().to_string();
 
     let provider = Arc::new(LocalProvider::new(vec![
+        // edit requires a prior read of the file
+        done_read(&path),
         done_edit(&path, "hello world", "hello universe"),
         done_text("done."),
     ]));
@@ -106,13 +126,17 @@ async fn bc_2_2_edit_unique_match_changes_file() {
             max_turns: 10,
             context_window: 32_768,
             sandbox_network: true,
+            sandbox_unsandboxed: true,
+            redact_tool_output: false,
             fs_read_deny: vec![],
             fs_protected: vec![],
+            rules: vec![],
             hooks: vec![],
+            budgets: barry_core::budget::Budgets::default(),
         },
         provider.clone(),
         approver,
-        None,
+        permissive_policy(),
     )
     .expect("agent constructs");
 
@@ -128,7 +152,7 @@ async fn bc_2_2_edit_unique_match_changes_file() {
         .iter()
         .filter(|e| matches!(e, Event::ToolFinished { ok: true, .. }))
         .collect();
-    assert_eq!(finished.len(), 1);
+    assert_eq!(finished.len(), 2, "read and edit both succeed");
 
     let contents = std::fs::read_to_string(&file).unwrap();
     assert_eq!(contents, "hello universe\nhello there\n");
@@ -144,6 +168,7 @@ async fn bc_2_2_edit_non_unique_no_change() {
     let path = file.to_str().unwrap().to_string();
 
     let provider = Arc::new(LocalProvider::new(vec![
+        done_read(&path),
         done_edit(&path, "repeat", "once"),
         done_text("tried."),
     ]));
@@ -155,13 +180,17 @@ async fn bc_2_2_edit_non_unique_no_change() {
             max_turns: 10,
             context_window: 32_768,
             sandbox_network: true,
+            sandbox_unsandboxed: true,
+            redact_tool_output: false,
             fs_read_deny: vec![],
             fs_protected: vec![],
+            rules: vec![],
             hooks: vec![],
+            budgets: barry_core::budget::Budgets::default(),
         },
         provider,
         approver,
-        None,
+        permissive_policy(),
     )
     .expect("agent constructs");
 
@@ -189,4 +218,20 @@ async fn bc_2_2_edit_non_unique_no_change() {
         1,
         "expected one failed ToolFinished reporting match count"
     );
+}
+
+/// A policy with no rules and no read-deny, for tests that cover the turn loop
+/// and the tool plumbing rather than the policy engine (#30). It pre-approves
+/// nothing: a write outside its own cwd goes to the test approver.
+fn permissive_policy() -> barry_policy::Policy {
+    barry_policy::Policy::new(barry_policy::PolicyConfig {
+        cwd: std::env::temp_dir().join("barry-test-policy-cwd"),
+        home: std::env::temp_dir().join("barry-test-policy-home"),
+        extra_writable: vec![],
+        read_deny: vec![],
+        protected: vec![],
+        rules: vec![],
+        network: true,
+    })
+    .expect("policy constructs")
 }

@@ -7,15 +7,15 @@
 use std::time::Duration;
 
 use barry_protocol::{Message, StopReason, ToolSpec};
+use futures::SinkExt;
 use futures::channel::mpsc;
 use futures::stream::{BoxStream, StreamExt};
-use futures::SinkExt;
 use reqwest::{Client, Url};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
 use crate::retry::send_with_retry;
-use crate::sse::{parse_event_block, SseEvent, SseParser, StreamState};
+use crate::sse::{SseEvent, SseParser, StreamState, parse_event_block};
 use crate::{Compat, LlmError, LlmEvent, LlmRequest, Provider};
 
 /// Time allowed to establish the TCP/TLS connection.
@@ -41,6 +41,12 @@ impl OpenAiProvider {
     /// - `api_key_env`: name of the env var holding the key, or `None`
     /// - `max_output_tokens`: value of `max_tokens` in the request body
     /// - `compat`: provider quirks (reasoning field, parallel tools, stream usage)
+    ///
+    /// # Panics
+    ///
+    /// Panics if the HTTP client cannot be built (for example when the TLS
+    /// backend fails to initialise).
+    #[must_use]
     pub fn new(
         model: String,
         base_url: Url,
@@ -48,6 +54,10 @@ impl OpenAiProvider {
         max_output_tokens: u64,
         compat: Compat,
     ) -> Self {
+        #[allow(
+            clippy::expect_used,
+            reason = "builder only fails on TLS backend init, a startup invariant"
+        )]
         let client = Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
             .build()
@@ -107,12 +117,11 @@ async fn run_stream(
     let mut request = provider.client.post(url).json(&body);
 
     // Read the key at request time; never store it in the provider.
-    if let Some(env_name) = &provider.api_key_env {
-        if let Ok(key) = std::env::var(env_name) {
-            if !key.is_empty() {
-                request = request.bearer_auth(key);
-            }
-        }
+    if let Some(env_name) = &provider.api_key_env
+        && let Ok(key) = std::env::var(env_name)
+        && !key.is_empty()
+    {
+        request = request.bearer_auth(key);
     }
 
     let response = send_with_retry(&provider.client, request).await?;
@@ -219,7 +228,7 @@ fn chat_completions_url(base_url: &Url) -> Result<Url, LlmError> {
     Ok(base.join("chat/completions")?)
 }
 
-/// Map protocol messages to the OpenAI wire format.
+/// Map protocol messages to the `OpenAI` wire format.
 fn build_messages(messages: &[Message]) -> Vec<Value> {
     messages
         .iter()
