@@ -2,16 +2,25 @@
 
 use barry_protocol::{ApprovalChoice, ApprovalRequest};
 
-pub mod agent;
+mod agent;
 pub(crate) mod bounded;
 pub mod config;
-pub mod context;
-pub mod hooks;
-pub mod prompt;
-pub mod redact;
+mod context;
+mod hooks;
+mod prompt;
+mod redact;
 pub mod session;
-pub mod tools;
+mod tools;
 pub use agent::Agent;
+
+/// Internals re-exported for this crate's integration tests only. Not part of
+/// the supported API and may change without notice.
+#[doc(hidden)]
+pub mod testing {
+    pub use crate::context::{instructions_section, skills_section};
+    pub use crate::prompt::today;
+    pub use crate::redact::Redactor;
+}
 
 /// A boxed future, as returned by [`Approver::decide`].
 pub use futures::future::BoxFuture;

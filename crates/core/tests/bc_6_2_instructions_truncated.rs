@@ -4,7 +4,7 @@
     reason = "Rust 2024 makes env::set_var unsafe; the tests that use it do not share the variable across threads"
 )]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
-use barry_core::context::instructions::instructions_section;
+use barry_core::testing::instructions_section;
 use std::sync::Mutex;
 
 static HOME_LOCK: Mutex<()> = Mutex::new(());

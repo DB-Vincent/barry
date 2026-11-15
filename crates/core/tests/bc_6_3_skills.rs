@@ -2,7 +2,7 @@
 //! and its body does not.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
-use barry_core::context::skills::skills_section;
+use barry_core::testing::skills_section;
 use std::path::PathBuf;
 
 fn write_skill(dir: PathBuf, _name: &str, frontmatter: &str, body: &str) {
