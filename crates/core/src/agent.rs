@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use barry_llm::{LlmEvent, LlmRequest, Provider};
-use barry_policy::Policy;
+use barry_policy::{Policy, SessionGrants};
 use barry_protocol::{DecidedBy, Decision, Event, Message, StopReason, ToolCall, Usage};
 use futures::channel::mpsc;
 use futures::sink::SinkExt;
@@ -76,8 +76,10 @@ pub struct Agent {
     pub(crate) approver: Arc<dyn Approver>,
     /// Always present (#30): a missing policy used to mean "unsandboxed bash,
     /// unrestricted writes", which is not a mode any run should reach by
-    /// accident.
+    /// accident. Immutable after construction.
     policy: Policy,
+    /// Approvals given during this session, passed alongside the policy.
+    grants: SessionGrants,
     /// `sandbox.unsandboxed = true`: bash runs without the OS sandbox (#30).
     unsandboxed: bool,
     history: Vec<Message>,
@@ -174,6 +176,7 @@ impl Agent {
             provider,
             approver,
             policy,
+            grants: SessionGrants::new(),
             unsandboxed,
             cwd,
             history: Vec::new(),
@@ -668,6 +671,7 @@ impl Agent {
                                     // A tool error is a result, not a turn failure.
                                     let mut ctx = ToolContext {
                                         policy: &mut self.policy,
+                                        grants: &mut self.grants,
                                         unsandboxed: self.unsandboxed,
                                         approver: &self.approver,
                                         cancel: &cancel,
@@ -768,7 +772,7 @@ impl Agent {
     /// Directories granted this session (PLAN 6.9 `/grants`).
     #[must_use]
     pub fn grants(&self) -> Vec<std::path::PathBuf> {
-        self.policy.grants().to_vec()
+        self.grants.dirs().to_vec()
     }
 
     /// Replace the provider after `/model` changes the model id. History and

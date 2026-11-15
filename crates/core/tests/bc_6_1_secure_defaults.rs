@@ -3,7 +3,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use barry_core::config::Config;
-use barry_policy::{Policy, PolicyConfig};
+use barry_policy::{Policy, PolicyConfig, SessionGrants};
 use barry_protocol::Decision;
 use barry_testkit::Workspace;
 
@@ -44,7 +44,7 @@ fn a_protected_path_asks_by_default() {
     let env_file = ws.cwd().join(".env");
     std::fs::write(&env_file, "SECRET=1\n").expect("write .env");
 
-    let (decision, _) = policy.check_write(&env_file);
+    let (decision, _) = policy.check_write(&env_file, &SessionGrants::new());
 
     assert!(
         matches!(&decision, Decision::Ask { reason } if reason.contains("protected")),
@@ -60,7 +60,7 @@ fn the_git_directory_asks_by_default() {
     std::fs::create_dir_all(config.parent().expect("parent")).expect("mkdir .git");
     std::fs::write(&config, "[core]\n").expect("write .git/config");
 
-    let (decision, _) = policy.check_write(&config);
+    let (decision, _) = policy.check_write(&config, &SessionGrants::new());
 
     assert!(
         matches!(&decision, Decision::Ask { reason } if reason.contains("protected")),

@@ -393,9 +393,6 @@ pub(crate) fn policy_fingerprint(policy: &Policy) -> String {
     for path in policy.writable_roots() {
         field(&mut hasher, path.display().to_string().as_bytes());
     }
-    for path in policy.grants() {
-        field(&mut hasher, path.display().to_string().as_bytes());
-    }
     for path in policy.read_deny_paths() {
         field(&mut hasher, path.display().to_string().as_bytes());
     }

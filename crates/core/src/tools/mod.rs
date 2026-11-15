@@ -14,7 +14,7 @@ mod write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
-use barry_policy::Policy;
+use barry_policy::{Policy, SessionGrants};
 use barry_protocol::{ApprovalChoice, ApprovalRequest, DecidedBy, Decision, ToolCall, ToolSpec};
 use futures::future::BoxFuture;
 use tokio_util::sync::CancellationToken;
@@ -75,7 +75,9 @@ impl ToolResult {
 /// because someone chose it. Running without the OS sandbox is now an explicit
 /// config flag (`sandbox.unsandboxed`) that the session log records.
 pub(crate) struct ToolContext<'a> {
-    pub policy: &'a mut Policy,
+    pub policy: &'a Policy,
+    /// Approvals the user gave this session; the tools add to them.
+    pub grants: &'a mut SessionGrants,
     /// `sandbox.unsandboxed = true`: run bash without the OS sandbox.
     pub unsandboxed: bool,
     pub approver: &'a Arc<dyn Approver>,
@@ -90,7 +92,8 @@ pub(crate) struct ToolCtx<'a> {
     pub(crate) call: &'a ToolCall,
     /// The call arguments after `PreToolUse` hooks ran (a hook may rewrite them).
     pub(crate) arguments: serde_json::Value,
-    pub(crate) policy: &'a mut Policy,
+    pub(crate) policy: &'a Policy,
+    pub(crate) grants: &'a mut SessionGrants,
     /// `sandbox.unsandboxed = true`: run bash without the OS sandbox.
     pub(crate) unsandboxed: bool,
     pub(crate) approver: &'a Arc<dyn Approver>,
@@ -202,7 +205,8 @@ pub(crate) async fn execute_tool(
     let mut ctx = ToolCtx {
         call,
         arguments: call.arguments.clone(),
-        policy: &mut *tcx.policy,
+        policy: tcx.policy,
+        grants: &mut *tcx.grants,
         unsandboxed: tcx.unsandboxed,
         approver: tcx.approver,
         cancel: tcx.cancel,
@@ -336,16 +340,17 @@ pub(crate) async fn check_write_approval(
     call_id: &str,
     path: &str,
     tool: &str,
-    policy: &mut Policy,
+    policy: &Policy,
+    grants: &mut SessionGrants,
     approver: &Arc<dyn Approver>,
 ) -> Result<WriteDecision, CoreError> {
-    let (decision, grant_dir) = policy.check_write(Path::new(path));
+    let (decision, grant_dir) = policy.check_write(Path::new(path), grants);
     match decision {
         Decision::Allow => {
             // A path covered by an earlier grant was decided by the user, not
             // by the default in-cwd rule. Keep `decided_by` truthful after
             // "always this session".
-            let decided_by = if policy.is_granted(Path::new(path)) {
+            let decided_by = if grants.is_granted(policy, Path::new(path)) {
                 DecidedBy::User
             } else {
                 DecidedBy::Default
@@ -390,8 +395,8 @@ pub(crate) async fn check_write_approval(
                     grant: None,
                 }),
                 ApprovalChoice::AlwaysThisSession => {
-                    let granted =
-                        grant_path.and_then(|dir| policy.grant_dir(&dir).ok().map(|()| dir));
+                    let granted = grant_path
+                        .and_then(|dir| grants.grant_dir(policy, &dir).ok().map(|()| dir));
                     Ok(WriteDecision {
                         allowed: true,
                         decision: Decision::Allow,
@@ -443,7 +448,15 @@ pub(crate) async fn authorise_write(
     tool: &str,
     path: &str,
 ) -> Result<Result<PathBuf, ToolResult>, CoreError> {
-    let decision = check_write_approval(&ctx.call.id, path, tool, ctx.policy, ctx.approver).await?;
+    let decision = check_write_approval(
+        &ctx.call.id,
+        path,
+        tool,
+        ctx.policy,
+        ctx.grants,
+        ctx.approver,
+    )
+    .await?;
     // Record the approval before doing the work, so a crash cannot lose it.
     ctx.record_decision(&decision.decision, &decision.decided_by)?;
     if let Some(dir) = &decision.grant {

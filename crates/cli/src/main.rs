@@ -193,7 +193,8 @@ fn run_command(command: Commands, cfg: &Config) -> ExitCode {
                         return ExitCode::from(2);
                     }
                 };
-                let (decision, rule_id) = policy.check_bash(&command);
+                let (decision, rule_id) =
+                    policy.check_bash(&command, &barry_policy::SessionGrants::new());
                 match decision {
                     barry_protocol::Decision::Allow => {
                         if let Some(id) = &rule_id {

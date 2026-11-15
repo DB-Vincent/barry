@@ -6,7 +6,7 @@
 /// missing component and was appended to the canonical path literally. The
 /// result looked like it lived inside cwd, but `std::fs::write` followed the
 /// link and created a file outside it.
-use barry_policy::{Decision, Policy, PolicyConfig};
+use barry_policy::{Decision, Policy, PolicyConfig, SessionGrants};
 use barry_testkit::Workspace;
 
 fn policy(ws: &Workspace) -> Policy {
@@ -32,7 +32,7 @@ fn bc_3_5_dangling_symlink_is_denied() {
     std::os::unix::fs::symlink(&escape_target, &link).unwrap();
     assert!(!escape_target.exists(), "target must start out missing");
 
-    let (decision, grant) = policy.check_write(&link);
+    let (decision, grant) = policy.check_write(&link, &SessionGrants::new());
 
     assert!(
         matches!(decision, Decision::Deny { .. }),

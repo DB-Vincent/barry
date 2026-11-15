@@ -6,7 +6,7 @@
 /// rejected — but it must be resolved from the right base. An absolute path
 /// starts at the filesystem root; resolving it from cwd would silently grant a
 /// directory the user never approved.
-use barry_policy::{Policy, PolicyConfig};
+use barry_policy::{Policy, PolicyConfig, SessionGrants};
 use barry_testkit::Workspace;
 use std::path::Path;
 
@@ -26,7 +26,8 @@ fn policy(ws: &Workspace) -> Policy {
 #[test]
 fn absolute_grant_with_dotdot_resolves_from_the_root() {
     let ws = Workspace::new();
-    let mut policy = policy(&ws);
+    let policy = policy(&ws);
+    let mut grants = SessionGrants::new();
 
     let outside = std::fs::canonicalize(ws.outside()).unwrap();
     let dir = outside.join("sub");
@@ -35,11 +36,11 @@ fn absolute_grant_with_dotdot_resolves_from_the_root() {
     // `<outside>/sub/../elsewhere` must resolve to `<outside>/elsewhere`.
     let requested = dir.join("../elsewhere");
     std::fs::create_dir_all(outside.join("elsewhere")).unwrap();
-    policy.grant_dir(&requested).unwrap();
+    grants.grant_dir(&policy, &requested).unwrap();
 
     let expected = std::fs::canonicalize(outside.join("elsewhere")).unwrap();
     assert_eq!(
-        policy.grants(),
+        grants.dirs(),
         &[expected],
         "absolute grant must not be re-based on cwd"
     );
@@ -48,21 +49,25 @@ fn absolute_grant_with_dotdot_resolves_from_the_root() {
 #[test]
 fn relative_grant_still_resolves_against_cwd() {
     let ws = Workspace::new();
-    let mut policy = policy(&ws);
+    let policy = policy(&ws);
+    let mut grants = SessionGrants::new();
 
-    policy.grant_dir(Path::new("nested/../granted")).unwrap();
+    grants
+        .grant_dir(&policy, Path::new("nested/../granted"))
+        .unwrap();
 
     let expected = std::fs::canonicalize(ws.cwd()).unwrap().join("granted");
-    assert_eq!(policy.grants(), &[expected]);
+    assert_eq!(grants.dirs(), &[expected]);
 }
 
 #[test]
 fn grant_does_not_create_the_directory() {
     let ws = Workspace::new();
-    let mut policy = policy(&ws);
+    let policy = policy(&ws);
+    let mut grants = SessionGrants::new();
 
     let target = ws.outside().join("not-created-by-grant");
-    policy.grant_dir(&target).unwrap();
+    grants.grant_dir(&policy, &target).unwrap();
 
     assert!(
         !target.exists(),

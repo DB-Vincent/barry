@@ -6,7 +6,7 @@
 /// `find . -exec ...` and `python -c 'x' # cargo test` all passed as "allow",
 /// while `cat issue.md` was denied because "su" appears inside "issue".
 /// Matching is now on a parsed argv.
-use barry_policy::{Decision, Policy, PolicyConfig};
+use barry_policy::{Decision, Policy, PolicyConfig, SessionGrants};
 use barry_testkit::Workspace;
 
 fn policy(ws: &Workspace) -> Policy {
@@ -23,7 +23,7 @@ fn policy(ws: &Workspace) -> Policy {
 }
 
 fn decision(ws: &Workspace, command: &str) -> Decision {
-    policy(ws).check_bash(command).0
+    policy(ws).check_bash(command, &SessionGrants::new()).0
 }
 
 #[test]

@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use barry_policy::Policy;
+use barry_policy::{Policy, SessionGrants};
 use barry_protocol::{ApprovalChoice, ApprovalRequest, DecidedBy, Decision, ToolSpec};
 use barry_sandbox::{self as sandbox, SandboxSpec};
 use futures::future::BoxFuture;
@@ -59,6 +59,7 @@ async fn run(ctx: ToolCtx<'_>) -> Result<ToolResult, CoreError> {
     let ToolCtx {
         call,
         policy,
+        grants,
         unsandboxed,
         approver,
         cancel,
@@ -67,6 +68,7 @@ async fn run(ctx: ToolCtx<'_>) -> Result<ToolResult, CoreError> {
     } = ctx;
     let mut run_ctx = RunCtx {
         policy,
+        grants,
         unsandboxed,
         approver,
         cancel,
@@ -75,7 +77,7 @@ async fn run(ctx: ToolCtx<'_>) -> Result<ToolResult, CoreError> {
     // Policy check: deny > grant > ask > allow. The policy decides even when
     // the OS sandbox is off (#30): dropping the sandbox must not also drop the
     // deny rules and approvals.
-    let (decision, rule_id) = run_ctx.policy.check_bash(command);
+    let (decision, rule_id) = run_ctx.policy.check_bash(command, run_ctx.grants);
     let decided_by = match rule_id.as_deref() {
         // A session prefix grant is a user decision, not a rule id.
         Some(grant) if grant.starts_with("grant: ") => DecidedBy::User,
@@ -139,7 +141,7 @@ async fn run(ctx: ToolCtx<'_>) -> Result<ToolResult, CoreError> {
                 ApprovalChoice::AlwaysThisSession => {
                     let prefix = session_prefix(command);
                     if let Some(prefix) = &prefix {
-                        run_ctx.policy.approve_prefix(prefix.clone());
+                        run_ctx.grants.approve_prefix(prefix.clone());
                         record_prefix(&mut log, &prefix.join(" "))?;
                     }
                     record_decision(&mut log, call, &Decision::Allow, &DecidedBy::User)?;
@@ -187,7 +189,8 @@ async fn run(ctx: ToolCtx<'_>) -> Result<ToolResult, CoreError> {
 
 /// The parts of the call context that running a command needs.
 struct RunCtx<'a> {
-    policy: &'a mut Policy,
+    policy: &'a Policy,
+    grants: &'a mut SessionGrants,
     unsandboxed: bool,
     approver: &'a std::sync::Arc<dyn crate::Approver>,
     cancel: &'a CancellationToken,
@@ -435,11 +438,11 @@ async fn run_bash_command(
 
 /// Build the sandbox spec from the current policy. Rebuilt after a grant so
 /// the retry sees the newly granted directory.
-fn sandbox_spec(policy: &Policy) -> SandboxSpec {
+fn sandbox_spec(policy: &Policy, grants: &SessionGrants) -> SandboxSpec {
     SandboxSpec {
         cwd: policy.cwd().to_path_buf(),
         writable_roots: policy.writable_roots().to_vec(),
-        grants: policy.grants().to_vec(),
+        grants: grants.dirs().to_vec(),
         read_deny: policy.read_deny_paths().to_vec(),
         // Every protected path under every writable root, including nested
         // repositories. Computed by the policy, not `cwd.join(p)` here, so an
@@ -466,8 +469,13 @@ async fn run_bash(
         return run_bash_direct(command, timeout_secs, ctx.cancel).await;
     }
 
-    let first =
-        execute_bash_sandboxed(sandbox_spec(ctx.policy), command, timeout_secs, ctx.cancel).await?;
+    let first = execute_bash_sandboxed(
+        sandbox_spec(ctx.policy, ctx.grants),
+        command,
+        timeout_secs,
+        ctx.cancel,
+    )
+    .await?;
     if !sandbox_denied(&first, command) {
         return Ok(first);
     }
@@ -490,12 +498,17 @@ async fn run_bash(
         // "denied by user", so it can reason about the actual block.
         ApprovalChoice::Deny => Ok(first),
         ApprovalChoice::Once | ApprovalChoice::AlwaysThisSession => {
-            ctx.policy
-                .grant_dir(&target_dir)
+            ctx.grants
+                .grant_dir(ctx.policy, &target_dir)
                 .map_err(|e| CoreError::Provider(format!("failed to grant directory: {e}")))?;
             record_grant(log, &target_dir)?;
-            execute_bash_sandboxed(sandbox_spec(ctx.policy), command, timeout_secs, ctx.cancel)
-                .await
+            execute_bash_sandboxed(
+                sandbox_spec(ctx.policy, ctx.grants),
+                command,
+                timeout_secs,
+                ctx.cancel,
+            )
+            .await
         }
     }
 }
