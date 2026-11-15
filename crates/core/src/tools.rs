@@ -462,7 +462,7 @@ async fn execute_read(path: &str) -> Result<ToolResult, CoreError> {
             let message = format!("not read: {err}");
             Ok(ToolResult::new(false, message.clone(), message))
         }
-        Err(ReadError::Io(err)) => Err(CoreError::Provider(err.to_string())),
+        Err(ReadError::Io(err)) => Err(CoreError::Io(err)),
     }
 }
 
@@ -565,9 +565,7 @@ async fn execute_read_with_policy(
 }
 
 async fn execute_write(path: &Path, content: &str) -> Result<ToolResult, CoreError> {
-    write_file(path, content)
-        .await
-        .map_err(|e| CoreError::Provider(e.to_string()))?;
+    write_file(path, content).await.map_err(CoreError::Io)?;
     Ok(ToolResult::new(
         true,
         format!("wrote {} bytes to {}", content.len(), path.display()),
@@ -582,7 +580,7 @@ async fn execute_edit(
 ) -> Result<ToolResult, CoreError> {
     let content = tokio::fs::read_to_string(path)
         .await
-        .map_err(|e| CoreError::Provider(e.to_string()))?;
+        .map_err(CoreError::Io)?;
     let count = content.matches(old_string).count();
 
     match count {
@@ -599,7 +597,7 @@ async fn execute_edit(
             let new_content = content.replacen(old_string, new_string, 1);
             write_file(path, &new_content)
                 .await
-                .map_err(|e| CoreError::Provider(e.to_string()))?;
+                .map_err(CoreError::Io)?;
             Ok(ToolResult::new(
                 true,
                 format!(
@@ -927,9 +925,7 @@ async fn run_bash_command(
         .stderr(std::process::Stdio::piped())
         .process_group(0);
 
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| CoreError::Provider(format!("failed to run command: {e}")))?;
+    let mut child = cmd.spawn().map_err(CoreError::Io)?;
 
     let child_id = child.id().unwrap_or(0);
 
@@ -993,9 +989,7 @@ async fn run_bash_command(
                     )
                     .with_exit_code(Some(exit_code)))
                 }
-                Ok(Err(io_err)) => Err(CoreError::Provider(format!(
-                    "failed to read command output: {io_err}"
-                ))),
+                Ok(Err(io_err)) => Err(CoreError::Io(io_err)),
                 Err(_elapsed) => {
                     kill_process_group(child_id);
                     Ok(ToolResult::new(

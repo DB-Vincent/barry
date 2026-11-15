@@ -28,6 +28,10 @@ pub enum CoreError {
     Config(String),
     #[error("provider error: {0}")]
     Provider(String),
+    /// A filesystem or process failure (#29). Kept apart from `Provider` so a
+    /// missing file is not reported as an LLM failure.
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
     #[error("not implemented: {0}")]
     NotImplemented(String),
     #[error("session error: {0}")]
