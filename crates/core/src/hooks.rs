@@ -56,8 +56,10 @@ struct HookOutput {
     decision: Option<String>,
     #[serde(default)]
     reason: Option<String>,
+    /// Either an object with the new tool arguments, or a JSON string holding
+    /// them. Hooks written in shell find the object form far easier.
     #[serde(default)]
-    updated_input: Option<String>,
+    updated_input: Option<serde_json::Value>,
     #[serde(default)]
     context: Option<String>,
 }
@@ -166,10 +168,15 @@ impl Hook {
                         },
                         Some("allow") => HookOutcome::Allow,
                         Some("updated_input") | None => {
-                            if let Some(input) = decoded.updated_input {
-                                HookOutcome::UpdatedInput { input }
-                            } else {
-                                HookOutcome::Allow
+                            match decoded.updated_input {
+                                // A string value is already JSON text.
+                                Some(serde_json::Value::String(text)) => {
+                                    HookOutcome::UpdatedInput { input: text }
+                                }
+                                Some(value) => HookOutcome::UpdatedInput {
+                                    input: value.to_string(),
+                                },
+                                None => HookOutcome::Allow,
                             }
                         }
                         other => HookOutcome::Warning {

@@ -270,8 +270,14 @@ pub(crate) async fn execute_tool(
             let path = arguments.get("path").and_then(|v| v.as_str()).unwrap_or("");
             execute_read_with_policy(path, policy, call, &mut log).await
         }
-        "write" => execute_write_with_approval(call, policy, approver, cancel, &mut log).await,
-        "edit" => execute_edit_with_approval(call, policy, approver, cancel, &mut log).await,
+        // `arguments`, not `call.arguments`: a PreToolUse hook may have
+        // rewritten the input, and the rewrite must be what runs.
+        "write" => {
+            execute_write_with_approval(call, &arguments, policy, approver, cancel, &mut log).await
+        }
+        "edit" => {
+            execute_edit_with_approval(call, &arguments, policy, approver, cancel, &mut log).await
+        }
         "bash" => {
             let command = arguments
                 .get("command")
@@ -698,18 +704,14 @@ fn denied_result(decision: &Decision) -> ToolResult {
 /// Run a write through the policy + approval flow.
 async fn execute_write_with_approval(
     call: &ToolCall,
+    arguments: &serde_json::Value,
     policy: &mut Option<Policy>,
     approver: &Arc<dyn Approver>,
     cancel: &CancellationToken,
     log: &mut Option<&mut SessionLog>,
 ) -> Result<ToolResult, CoreError> {
-    let path = call
-        .arguments
-        .get("path")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let content = call
-        .arguments
+    let path = arguments.get("path").and_then(|v| v.as_str()).unwrap_or("");
+    let content = arguments
         .get("content")
         .and_then(|v| v.as_str())
         .unwrap_or("");
@@ -732,23 +734,18 @@ async fn execute_write_with_approval(
 /// Run an edit through the policy + approval flow.
 async fn execute_edit_with_approval(
     call: &ToolCall,
+    arguments: &serde_json::Value,
     policy: &mut Option<Policy>,
     approver: &Arc<dyn Approver>,
     cancel: &CancellationToken,
     log: &mut Option<&mut SessionLog>,
 ) -> Result<ToolResult, CoreError> {
-    let path = call
-        .arguments
-        .get("path")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let old_string = call
-        .arguments
+    let path = arguments.get("path").and_then(|v| v.as_str()).unwrap_or("");
+    let old_string = arguments
         .get("old_string")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    let new_string = call
-        .arguments
+    let new_string = arguments
         .get("new_string")
         .and_then(|v| v.as_str())
         .unwrap_or("");
