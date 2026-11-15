@@ -24,6 +24,8 @@ pub enum ConfigError {
 pub struct Config {
     pub default_model: String,
     pub max_turns: u64,
+    /// Context window used for compaction heuristics (tokens).
+    pub context_window: u64,
     /// Sandbox: whether bash commands may access the network.
     pub sandbox_network: bool,
     /// Filesystem: paths whose contents must never be read (expanded `~`,
@@ -32,6 +34,22 @@ pub struct Config {
     /// Filesystem: path components that always require approval (e.g. `.git`,
     /// `.barry`, `.env`).
     pub fs_protected: Vec<String>,
+    /// Hooks run around tool execution (PLAN 6.5).
+    pub hooks: Vec<HookConfig>,
+}
+
+/// A single hook: `[[hooks.PreToolUse]]` in the config.
+#[derive(Debug, Clone)]
+pub struct HookConfig {
+    /// Regex matched against the tool name (e.g. `bash|write`).
+    pub matcher: String,
+    /// Command + arguments to run.
+    pub command: Vec<String>,
+    /// Hook timeout in seconds.
+    pub timeout_secs: u64,
+    /// If true, a non-zero / timeout result blocks the tool; otherwise just
+    /// a warning is emitted.
+    pub fail_closed: bool,
 }
 
 impl Default for Config {
@@ -39,9 +57,11 @@ impl Default for Config {
         Self {
             default_model: "local".to_string(),
             max_turns: 50,
+            context_window: 32_768,
             sandbox_network: true,
             fs_read_deny: vec![],
             fs_protected: vec![],
+            hooks: vec![],
         }
     }
 }
@@ -99,12 +119,59 @@ impl Config {
             })
             .unwrap_or_default();
 
+        let hooks: Vec<HookConfig> = value
+            .get("hooks")
+            .and_then(|h| h.get("PreToolUse"))
+            .and_then(|r| r.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| {
+                        let matcher = v
+                            .get("matcher")
+                            .and_then(|m| m.as_str())
+                            .map(|s| s.to_string())
+                            .unwrap_or_default();
+                        let command: Vec<String> = v
+                            .get("command")
+                            .and_then(|c| c.as_array())
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        let timeout_secs = v
+                            .get("timeout_secs")
+                            .and_then(|t| t.as_integer())
+                            .and_then(|t| u64::try_from(t).ok())
+                            .unwrap_or(10);
+                        let fail_closed = v
+                            .get("fail_closed")
+                            .and_then(|f| f.as_bool())
+                            .unwrap_or(false);
+                        if matcher.is_empty() || command.is_empty() {
+                            None
+                        } else {
+                            Some(HookConfig {
+                                matcher,
+                                command,
+                                timeout_secs,
+                                fail_closed,
+                            })
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
         Ok(Some(Self {
             default_model: "local".to_string(),
             max_turns: 50,
+            context_window: 32_768,
             sandbox_network,
             fs_read_deny,
             fs_protected,
+            hooks,
         }))
     }
 }

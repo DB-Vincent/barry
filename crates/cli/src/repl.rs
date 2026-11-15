@@ -273,7 +273,7 @@ pub(crate) async fn run(
         }
 
         if let Some(command) = input.strip_prefix('/') {
-            if !handle_command(command, &mut model, &mut agent, &base_url) {
+            if !handle_command(command, &mut model, &mut agent, &base_url).await {
                 break;
             }
             continue;
@@ -324,12 +324,21 @@ pub(crate) async fn run(
 }
 
 /// Handle a slash command. Returns false when the REPL should exit.
-fn handle_command(command: &str, model: &mut String, agent: &mut Agent, base_url: &Url) -> bool {
+async fn handle_command(
+    command: &str,
+    model: &mut String,
+    agent: &mut Agent,
+    base_url: &Url,
+) -> bool {
     match command {
         "exit" | "quit" => return false,
         "compact" => {
-            // BC-6.7 lands with M6.
-            println!("compaction is not implemented yet (M6)");
+            // BC-6.7: force compaction of the conversation context.
+            match agent.compact().await {
+                Ok(true) => println!("compacted conversation context"),
+                Ok(false) => println!("nothing to compact"),
+                Err(err) => eprintln!("compaction failed: {err}"),
+            }
         }
         "grants" => {
             let grants = agent.grants();

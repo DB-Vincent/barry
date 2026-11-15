@@ -12,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
 use crate::context::truncate;
+use crate::hooks::{Hook, HookOutcome};
 use crate::session::{decided_by_label, decision_label, EntryKind, SessionLog};
 use crate::{Approver, CoreError};
 
@@ -192,28 +193,78 @@ pub(crate) async fn execute_tool(
     approver: &Arc<dyn Approver>,
     cancel: &CancellationToken,
     mut log: Option<&mut SessionLog>,
+    hooks: &[Hook],
 ) -> Result<ToolResult, CoreError> {
+    // PLAN 6.5: PreToolUse hooks run before the policy. A hook can deny or
+    // block the tool, rewrite its input, or emit a warning.
+    let cwd = std::env::current_dir()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| ".".to_string());
+    let mut arguments = call.arguments.clone();
+    for hook in hooks.iter().filter(|h| h.matches(&call.name)) {
+        let input = serde_json::to_string(&arguments).unwrap_or_default();
+        match hook
+            .run_pre_tool_use(&call.name, &input, &cwd, "main", cancel)
+            .await?
+        {
+            HookOutcome::Deny { reason } => {
+                record_decision(
+                    &mut log,
+                    call,
+                    &Decision::Deny {
+                        reason: format!("hook denied: {reason}"),
+                    },
+                    &DecidedBy::Hook("pre-tool-use".to_string()),
+                )?;
+                return Ok(ToolResult::new(
+                    false,
+                    format!("hook denied: {reason}"),
+                    "hook denied".to_string(),
+                ));
+            }
+            HookOutcome::Block { reason } => {
+                record_decision(
+                    &mut log,
+                    call,
+                    &Decision::Deny {
+                        reason: format!("hook blocked: {reason}"),
+                    },
+                    &DecidedBy::Hook("pre-tool-use".to_string()),
+                )?;
+                return Ok(ToolResult::new(
+                    false,
+                    format!("hook blocked: {reason}"),
+                    "hook blocked".to_string(),
+                ));
+            }
+            HookOutcome::UpdatedInput { input } => {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&input) {
+                    arguments = parsed;
+                }
+            }
+            HookOutcome::Warning { reason } => {
+                let _ = log
+                    .as_mut()
+                    .map(|l| l.append(EntryKind::Notice { text: reason }));
+            }
+            HookOutcome::Allow | HookOutcome::Ask { .. } => {}
+        }
+    }
     match call.name.as_str() {
         "read" => {
-            let path = call
-                .arguments
-                .get("path")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let path = arguments.get("path").and_then(|v| v.as_str()).unwrap_or("");
             execute_read_with_policy(path, policy, call, &mut log).await
         }
         "write" => execute_write_with_approval(call, policy, approver, cancel, &mut log).await,
         "edit" => execute_edit_with_approval(call, policy, approver, cancel, &mut log).await,
         "bash" => {
-            let command = call
-                .arguments
+            let command = arguments
                 .get("command")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             // Resolve default and bounds at the boundary; the worker takes a
             // plain u64 and needs no Option.
-            let timeout_secs = call
-                .arguments
+            let timeout_secs = arguments
                 .get("timeout_secs")
                 .and_then(|v| v.as_u64())
                 .map(|secs| secs.clamp(1, 600))

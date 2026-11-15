@@ -9,6 +9,9 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
+/// Serializes `HOME` env var access across parallel test threads.
+static HOME_LOCK: Mutex<()> = Mutex::new(());
+
 use barry_core::config::Config;
 use barry_core::{Agent, Approver, BoxFuture};
 use barry_llm::{LlmEvent, LlmRequest};
@@ -102,19 +105,30 @@ async fn bc_2_11_tool_list_is_exact_and_prompt_matches_snapshot() {
         LlmEvent::TextDelta("ok".to_string()),
         done_text("ok"),
     ]));
-    let mut agent = Agent::new(
-        Config {
-            default_model: "test".to_string(),
-            max_turns: 10,
-            sandbox_network: true,
-            fs_read_deny: vec![],
-            fs_protected: vec![],
-        },
-        provider.clone(),
-        Arc::new(LocalApprover),
-        None,
-    )
-    .expect("agent constructs");
+    // Keep HOME pointing at an empty dir so no AGENTS.md/skills leak into the
+    // prompt and the snapshot stays stable across machines (PLAN 6.3).
+    let home = tempfile::tempdir().unwrap();
+    let mut agent = {
+        let _guard = HOME_LOCK.lock().unwrap();
+        std::env::set_var("HOME", home.path());
+        let agent = Agent::new(
+            Config {
+                default_model: "test".to_string(),
+                max_turns: 10,
+                context_window: 32_768,
+                sandbox_network: true,
+                fs_read_deny: vec![],
+                fs_protected: vec![],
+                hooks: vec![],
+            },
+            provider.clone(),
+            Arc::new(LocalApprover),
+            None,
+        )
+        .expect("agent constructs");
+        std::env::remove_var("HOME");
+        agent
+    };
 
     let (tx, rx) = mpsc::channel(32);
     agent
@@ -151,10 +165,17 @@ async fn bc_2_11_tool_list_is_exact_and_prompt_matches_snapshot() {
 
     let cwd = std::env::current_dir().expect("cwd").display().to_string();
     let date = barry_core::prompt::today();
-    let normalized = first
+    let mut normalized = first
         .replace(&cwd, "[CWD]")
         .replace(&date, "[DATE]")
         .replace(std::env::consts::OS, "[OS]");
-
+    // PLAN 6.3: the AGENTS.md/skills instructions section depends on the
+    // filesystem (git root AGENTS.md, ~/.config/barry/AGENTS.md, skills dirs),
+    // so it is not deterministic for this snapshot test. It is covered
+    // separately by BC-6.1 to BC-6.3. Strip it here so the snapshot captures
+    // only the PLAN 5.2 template.
+    if let Some(pos) = normalized.find("\n# Project instructions") {
+        normalized.truncate(pos);
+    }
     insta::assert_snapshot!(normalized);
 }

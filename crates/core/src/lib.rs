@@ -10,11 +10,11 @@ use barry_protocol::{ApprovalChoice, ApprovalRequest};
 pub mod agent;
 pub mod config;
 pub mod context;
+pub mod hooks;
 pub mod prompt;
 pub mod redact;
 pub mod session;
 pub mod tools;
-
 pub use agent::Agent;
 
 /// A future returned by [`Approver::decide`].
