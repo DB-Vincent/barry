@@ -53,5 +53,16 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
-      # cargo-deny is parked (invalid deny.toml for 0.20, license allowlist,
-      # RUSTSEC advisories). Re-enable when those findings are addressed.
+  # cargo-deny was parked on an invalid deny.toml (#41), so known RUSTSEC
+  # advisories, licences and non-crates.io sources went unchecked. The file is
+  # now schema v2, and this job runs the advisory, licence, source and ban
+  # checks on every pull request.
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: cargo deny
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check

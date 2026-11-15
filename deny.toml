@@ -1,12 +1,39 @@
-advisories = { ignore = [], database = { force-offline = true } }
-sources = [{ allow = ["crates-io"], deny = ["other"] }]
-licenses = { allow = [
+# cargo-deny configuration. Re-enabled for issue #41: the previous file used a
+# pre-0.14 `advisories.database` table, which cargo-deny rejects, so the job was
+# parked and nothing checked advisories at all.
+
+[advisories]
+# Schema version for this section; cargo-deny requires it.
+version = 2
+# Known advisories go here with a reason and an expiry review, never silently:
+#   { id = "RUSTSEC-0000-0000", reason = "..." }
+ignore = []
+
+[licenses]
+version = 2
+# The allowlist may name licences the tree does not currently use without
+# failing the run, so it can stay ahead of a dependency bump.
+unused-allowed-license = "allow"
+allow = [
     "MIT",
     "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
     "BSD-2-Clause",
     "BSD-3-Clause",
     "ISC",
+    "MIT-0",
+    "Unicode-3.0",
     "Unicode-DFS-2016",
+    "Zlib",
+    "BSL-1.0",
+    "MPL-2.0",
+    "CC0-1.0",
     "Unlicense",
     "0BSD",
-] }
+]
+
+[sources]
+version = 2
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
