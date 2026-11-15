@@ -54,8 +54,11 @@ async fn bc_5_1_tool_call_logs_decision_and_result() {
     let ws = Workspace::new();
     let target = ws.outside().join("f");
 
-    // A write outside cwd asks, and the user approves it once.
-    let approver = Arc::new(ScriptedApprover::new(vec![ApprovalChoice::Once]));
+    // A write outside cwd asks, and the user approves the directory for the
+    // rest of the session (so a grant entry is recorded).
+    let approver = Arc::new(ScriptedApprover::new(vec![
+        ApprovalChoice::AlwaysThisSession,
+    ]));
     let provider = Arc::new(ScriptedProvider::new(vec![
         Reply::Tool {
             name: "write".to_string(),
@@ -228,7 +231,7 @@ async fn bc_5_1_session_granted_call_records_the_user() {
     assert!(
         entries
             .iter()
-            .any(|e| e["type"] == "prefix_approved" && e["prefix"] == "npm"),
+            .any(|e| e["type"] == "prefix_approved" && e["prefix"] == "npm install"),
         "the approved prefix is logged: {entries:?}"
     );
 }

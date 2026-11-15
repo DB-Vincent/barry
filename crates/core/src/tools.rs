@@ -95,6 +95,21 @@ fn record_grant(log: &mut Option<&mut SessionLog>, dir: &Path) -> Result<(), Cor
         .map_err(|err| CoreError::Session(err.to_string()))
 }
 
+/// The argv prefix "always this session" grants for a command: the first two
+/// tokens, or the first when there is only one (PLAN 6.1.3).
+fn session_prefix(command: &str) -> Option<Vec<String>> {
+    let prefix: Vec<String> = command
+        .split_whitespace()
+        .take(2)
+        .map(str::to_string)
+        .collect();
+    if prefix.is_empty() {
+        None
+    } else {
+        Some(prefix)
+    }
+}
+
 /// Record a bash prefix approval as soon as the user approves it.
 fn record_prefix(log: &mut Option<&mut SessionLog>, prefix: &str) -> Result<(), CoreError> {
     let Some(session) = log.as_mut() else {
@@ -324,16 +339,29 @@ pub(crate) async fn execute_tool(
                                 "denied by user".to_string(),
                             ))
                         }
-                        ApprovalChoice::Once | ApprovalChoice::AlwaysThisSession => {
-                            // Grant the first word of the command as a session prefix.
-                            let prefix = command.split_whitespace().next().map(str::to_string);
-                            if let Some(first_word) = &prefix {
-                                policy.approve_prefix(first_word);
+                        // "Once" runs this one command and records nothing:
+                        // approving on demand must not silently approve every
+                        // later command that starts with the same word.
+                        ApprovalChoice::Once => {
+                            record_decision(&mut log, call, &Decision::Allow, &DecidedBy::User)?;
+                            run_sandboxed_with_retry(
+                                policy,
+                                command,
+                                timeout_secs,
+                                cancel,
+                                approver,
+                                call.id.clone(),
+                                &mut log,
+                            )
+                            .await
+                        }
+                        ApprovalChoice::AlwaysThisSession => {
+                            let prefix = session_prefix(command);
+                            if let Some(prefix) = &prefix {
+                                policy.approve_prefix(prefix.clone());
+                                record_prefix(&mut log, &prefix.join(" "))?;
                             }
                             record_decision(&mut log, call, &Decision::Allow, &DecidedBy::User)?;
-                            if let Some(prefix) = &prefix {
-                                record_prefix(&mut log, prefix)?;
-                            }
                             run_sandboxed_with_retry(
                                 policy,
                                 command,
@@ -635,13 +663,15 @@ async fn check_write_approval(
                     decided_by: DecidedBy::User,
                     grant: None,
                 }),
-                ApprovalChoice::Once | ApprovalChoice::AlwaysThisSession => {
-                    let mut granted = None;
-                    if let Some(dir) = grant_path {
-                        if policy.grant_dir(&dir).is_ok() {
-                            granted = Some(dir);
-                        }
-                    }
+                ApprovalChoice::Once => Ok(WriteDecision {
+                    allowed: true,
+                    decision: Decision::Allow,
+                    decided_by: DecidedBy::User,
+                    grant: None,
+                }),
+                ApprovalChoice::AlwaysThisSession => {
+                    let granted =
+                        grant_path.and_then(|dir| policy.grant_dir(&dir).ok().map(|()| dir));
                     Ok(WriteDecision {
                         allowed: true,
                         decision: Decision::Allow,
