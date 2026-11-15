@@ -9,7 +9,8 @@
 //!         --bind <root> <root>           (each writable root)
 //!         --ro-bind <p> <p>              (each protected_ro path that exists)
 //!         --bind <grant> <grant>         (each explicit grant)
-//!         --tmpfs <dir>                  (each read-deny directory that exists)
+//!         --tmpfs <dir>                  (each read-deny directory that exists,
+//!                                         or is missing under a writable root)
 //!         --ro-bind /dev/null <file>     (each read-deny file that exists)
 //!         --unshare-user [--unshare-net if !network]
 //!         --die-with-parent --new-session --chdir <cwd>
@@ -66,8 +67,14 @@ pub(crate) fn command(
 
     // Read-deny directories masked with tmpfs; read-deny files masked with /dev/null.
     // Applied last so a grant cannot accidentally expose a read-denied path.
+    //
+    // A path that does not exist yet cannot be masked unless bwrap can create
+    // the mountpoint. It can only do that inside a writable mount; masking
+    // elsewhere would make bwrap fail (the rest of `/` is read-only). Missing
+    // entries under a writable root are masked as directories: the sandbox
+    // cannot then create anything readable at that name.
     for d in &spec.read_deny {
-        if d.exists() && d.is_dir() {
+        if d.is_dir() || (!d.exists() && mountpoint_creatable(spec, d)) {
             cmd.arg("--tmpfs").arg(d);
         }
     }
@@ -164,6 +171,22 @@ fn build_sandbox_env(shell_command: &str) -> String {
 /// adding an escaped quote, and starting a new quote.
 fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// Whether bwrap can create a mountpoint at `path`: its parent must exist and
+/// be writable inside the sandbox, i.e. covered by a writable root or a grant.
+/// Elsewhere bwrap refuses ("Read-only file system") and the command fails.
+fn mountpoint_creatable(spec: &crate::SandboxSpec, path: &std::path::Path) -> bool {
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    if !parent.is_dir() {
+        return false;
+    }
+    spec.writable_roots
+        .iter()
+        .chain(spec.grants.iter())
+        .any(|root| parent.starts_with(root))
 }
 
 /// Locate `bwrap` on `PATH`. Fail closed if not found.

@@ -51,6 +51,9 @@ pub struct Policy {
     cwd: PathBuf,
     read_deny: Vec<PathBuf>,
     protected: Vec<String>,
+    /// Every existing path named by `protected` under a writable root.
+    /// Computed once: walking the tree on each bash call is too slow.
+    protected_paths: Vec<PathBuf>,
     writable_roots: Vec<PathBuf>,
     grants: Vec<PathBuf>,
     bash_grants: Vec<Vec<String>>,
@@ -81,11 +84,13 @@ impl Policy {
         let cwd = canonicalize_or_keep(&cfg.cwd);
         let mut writable_roots: Vec<PathBuf> = vec![cwd.clone()];
         writable_roots.extend(cfg.extra_writable.iter().map(|r| canonicalize_or_keep(r)));
+        let protected_paths = collect_protected(&writable_roots, &cfg.protected);
 
         Ok(Self {
             cwd,
             read_deny,
             protected: cfg.protected,
+            protected_paths,
             writable_roots,
             grants: Vec::new(),
             bash_grants: Vec::new(),
@@ -261,6 +266,14 @@ impl Policy {
     /// Protected path components (e.g. ".git").
     pub fn protected(&self) -> &[String] {
         &self.protected
+    }
+
+    /// Existing paths named by [`Policy::protected`] under every writable root.
+    ///
+    /// Includes nested repositories (submodules, vendored crates) and extra
+    /// writable roots, so the sandbox can mount all of them read-only.
+    pub fn protected_paths(&self) -> &[PathBuf] {
+        &self.protected_paths
     }
 
     /// Configured bash rules, in order.
@@ -551,5 +564,46 @@ fn canonicalize_or_keep(path: &Path) -> PathBuf {
         std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
     } else {
         path.to_path_buf()
+    }
+}
+
+/// Find every entry named by `protected` under the writable `roots`.
+///
+/// A top-level `.git` is not enough: submodules and vendored repositories have
+/// their own, and the sandbox must keep all of them read-only. Symlinks are not
+/// followed, since they could point outside the writable tree, and a protected
+/// directory is not descended into (a `.git` has thousands of objects).
+fn collect_protected(roots: &[PathBuf], protected: &[String]) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for root in roots {
+        collect_protected_under(root, protected, &mut found, &mut seen);
+    }
+    found
+}
+
+fn collect_protected_under(
+    dir: &Path,
+    protected: &[String],
+    found: &mut Vec<PathBuf>,
+    seen: &mut std::collections::HashSet<PathBuf>,
+) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if protected.iter().any(|p| p.as_str() == name.as_ref()) {
+            if seen.insert(path.clone()) {
+                found.push(path);
+            }
+            continue;
+        }
+        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        if is_dir {
+            collect_protected_under(&path, protected, found, seen);
+        }
     }
 }
