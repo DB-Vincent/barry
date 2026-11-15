@@ -130,10 +130,11 @@ async fn agent_tool_is_advertised_and_honestly_unavailable() {
     );
 
     let requests = provider.requests.lock().unwrap();
-    // Advertised: the first request's tool list names it.
+    // Hidden: the first request's tool list does not name it, so the model is
+    // not invited to spend a turn on a tool that cannot work yet (#33).
     assert!(
-        requests[0].tools.iter().any(|t| t.name == "agent"),
-        "the agent tool must be in the advertised list"
+        !requests[0].tools.iter().any(|t| t.name == "agent"),
+        "the agent tool must not be advertised before M8"
     );
 
     let content = requests[1]
@@ -151,6 +152,6 @@ async fn agent_tool_is_advertised_and_honestly_unavailable() {
     );
     assert!(
         !content.contains("unknown tool"),
-        "an advertised tool must not look like a typo: {content}"
+        "a tool the model can still call must not look like a typo: {content}"
     );
 }
