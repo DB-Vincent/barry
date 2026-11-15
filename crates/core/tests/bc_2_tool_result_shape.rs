@@ -108,6 +108,7 @@ async fn tool_result_content(name: &str, arguments: serde_json::Value) -> String
             fs_read_deny: vec![],
             fs_protected: vec![],
             hooks: vec![],
+            budgets: Default::default(),
         },
         provider.clone(),
         Arc::new(LocalApprover),

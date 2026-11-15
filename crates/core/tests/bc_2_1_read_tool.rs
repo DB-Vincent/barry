@@ -119,6 +119,7 @@ async fn bc_2_1_read_tool_returns_numbered_contents() {
             fs_read_deny: vec![],
             fs_protected: vec![],
             hooks: vec![],
+            budgets: Default::default(),
         },
         provider.clone(),
         approver,

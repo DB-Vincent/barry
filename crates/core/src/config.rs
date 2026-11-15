@@ -4,6 +4,8 @@ use std::path::Path;
 
 use thiserror::Error;
 
+use crate::budget::Budgets;
+
 /// Errors from config loading.
 #[derive(Debug, Error)]
 pub enum ConfigError {
@@ -12,6 +14,8 @@ pub enum ConfigError {
         path: String,
         source: toml::de::Error,
     },
+    #[error("config error in {path}: {message}")]
+    Invalid { path: String, message: String },
     #[error("failed to read config file {path}: {source}")]
     Io {
         path: String,
@@ -36,6 +40,8 @@ pub struct Config {
     pub fs_protected: Vec<String>,
     /// Hooks run around tool execution (PLAN 6.5).
     pub hooks: Vec<HookConfig>,
+    /// Limits for one autonomous run (`[budgets]`).
+    pub budgets: Budgets,
 }
 
 /// A single hook: `[[hooks.PreToolUse]]` in the config.
@@ -62,8 +68,48 @@ impl Default for Config {
             fs_read_deny: vec![],
             fs_protected: vec![],
             hooks: vec![],
+            budgets: Budgets::default(),
         }
     }
+}
+
+/// Read an optional non-negative integer from `[budgets]`. A wrong type is an
+/// error: a limit that is silently ignored would not protect anything.
+fn budget_u64(
+    table: Option<&toml::Value>,
+    key: &str,
+    path: &Path,
+) -> Result<Option<u64>, ConfigError> {
+    let Some(value) = table.and_then(|t| t.get(key)) else {
+        return Ok(None);
+    };
+    value
+        .as_integer()
+        .and_then(|n| u64::try_from(n).ok())
+        .map(Some)
+        .ok_or_else(|| ConfigError::Invalid {
+            path: path.display().to_string(),
+            message: format!("budgets.{key} must be a non-negative integer"),
+        })
+}
+
+/// Read an optional number (float or integer) from `[budgets]`.
+fn budget_f64(
+    table: Option<&toml::Value>,
+    key: &str,
+    path: &Path,
+) -> Result<Option<f64>, ConfigError> {
+    let Some(value) = table.and_then(|t| t.get(key)) else {
+        return Ok(None);
+    };
+    value
+        .as_float()
+        .or_else(|| value.as_integer().map(|n| n as f64))
+        .map(Some)
+        .ok_or_else(|| ConfigError::Invalid {
+            path: path.display().to_string(),
+            message: format!("budgets.{key} must be a number"),
+        })
 }
 
 impl Config {
@@ -164,6 +210,20 @@ impl Config {
             })
             .unwrap_or_default();
 
+        let table = value.get("budgets");
+        let budgets = Budgets {
+            max_total_tokens: budget_u64(table, "max_total_tokens", path)?,
+            max_cost_usd: budget_f64(table, "max_cost_usd", path)?,
+            max_wall_secs: budget_u64(table, "max_wall_secs", path)?,
+            max_bash_secs: budget_u64(table, "max_bash_secs", path)?,
+            price_input_per_mtok: budget_f64(table, "price_input_per_mtok", path)?,
+            price_output_per_mtok: budget_f64(table, "price_output_per_mtok", path)?,
+        };
+        budgets.validate().map_err(|message| ConfigError::Invalid {
+            path: path.display().to_string(),
+            message,
+        })?;
+
         Ok(Some(Self {
             default_model: "local".to_string(),
             max_turns: 50,
@@ -172,6 +232,7 @@ impl Config {
             fs_read_deny,
             fs_protected,
             hooks,
+            budgets,
         }))
     }
 }

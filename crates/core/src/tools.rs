@@ -23,6 +23,8 @@ pub(crate) struct ToolResult {
     pub(crate) display: String,
     /// Bash exit code, when the tool ran a command.
     pub(crate) exit_code: Option<i32>,
+    /// Time spent running a bash command, for the bash-time budget.
+    pub(crate) bash_time: Duration,
 }
 
 impl ToolResult {
@@ -32,6 +34,7 @@ impl ToolResult {
             content,
             display,
             exit_code: None,
+            bash_time: Duration::ZERO,
         }
     }
 
@@ -756,8 +759,20 @@ async fn execute_bash_sandboxed(
     run_bash_command(cmd, timeout_secs, cancel).await
 }
 
-/// Common execution logic: spawn, race cancel vs timeout vs completion.
+/// Run a command and record how long it took.
 async fn run_bash_command(
+    cmd: tokio::process::Command,
+    timeout_secs: u64,
+    cancel: &CancellationToken,
+) -> Result<ToolResult, CoreError> {
+    let start = std::time::Instant::now();
+    let mut result = run_bash_command_inner(cmd, timeout_secs, cancel).await?;
+    result.bash_time = start.elapsed();
+    Ok(result)
+}
+
+/// Common execution logic: spawn, race cancel vs timeout vs completion.
+async fn run_bash_command_inner(
     cmd: tokio::process::Command,
     timeout_secs: u64,
     cancel: &CancellationToken,
@@ -875,7 +890,11 @@ async fn run_sandboxed_with_retry(
                 .grant_dir(&target_dir)
                 .map_err(|e| CoreError::Provider(format!("failed to grant directory: {e}")))?;
             record_grant(log, &target_dir)?;
-            execute_bash_sandboxed(sandbox_spec(policy), command, timeout_secs, cancel).await
+            let mut second =
+                execute_bash_sandboxed(sandbox_spec(policy), command, timeout_secs, cancel).await?;
+            // Both runs count against the bash-time budget.
+            second.bash_time += first.bash_time;
+            Ok(second)
         }
     }
 }

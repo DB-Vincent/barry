@@ -75,6 +75,7 @@ async fn bc_6_7_compact_forces_compaction() {
         fs_read_deny: vec![],
         fs_protected: vec![],
         hooks: vec![],
+        budgets: Default::default(),
     };
 
     let provider = Arc::new(RecordingProvider::new(vec![
@@ -115,6 +116,7 @@ async fn bc_6_7_compact_nothing_to_compact() {
         fs_read_deny: vec![],
         fs_protected: vec![],
         hooks: vec![],
+        budgets: Default::default(),
     };
     let mut agent = Agent::new(
         config,

@@ -53,6 +53,7 @@ async fn bc_4_1_sandbox_blocks_outside_write_despite_approval() {
             fs_read_deny: vec![],
             fs_protected: vec![],
             hooks: vec![],
+            budgets: Default::default(),
         },
         provider,
         approver.clone(),

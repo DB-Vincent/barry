@@ -121,6 +121,7 @@ async fn bc_2_9_cancel_during_bash_kills_it() {
             fs_read_deny: vec![],
             fs_protected: vec![],
             hooks: vec![],
+            budgets: Default::default(),
         },
         provider.clone(),
         Arc::new(LocalApprover),

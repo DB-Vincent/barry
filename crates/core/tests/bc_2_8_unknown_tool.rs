@@ -107,6 +107,7 @@ async fn bc_2_8_unknown_tool_is_ok_false_result() {
             fs_read_deny: vec![],
             fs_protected: vec![],
             hooks: vec![],
+            budgets: Default::default(),
         },
         provider.clone(),
         Arc::new(LocalApprover),

@@ -86,6 +86,7 @@ fn config_with_window(window: u64) -> barry_core::config::Config {
         fs_read_deny: vec![],
         fs_protected: vec![],
         hooks: vec![],
+        budgets: Default::default(),
     }
 }
 

@@ -52,6 +52,19 @@ pub struct ToolSpec {
     pub parameters: serde_json::Value,
 }
 
+/// Which run budget was exceeded.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum BudgetKind {
+    /// Total input plus output tokens.
+    Tokens,
+    /// Estimated cost in USD.
+    Cost,
+    /// Wall-clock time since the run started.
+    WallClock,
+    /// Cumulative time spent running bash commands.
+    BashTime,
+}
+
 /// Why the model stopped generating.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum StopReason {
@@ -60,6 +73,8 @@ pub enum StopReason {
     ToolCalls,
     ContentFilter,
     Aborted,
+    /// A configured run budget was exceeded; the run stopped on purpose.
+    BudgetExceeded(BudgetKind),
     Error(String),
 }
 

@@ -22,6 +22,7 @@ fn config() -> Config {
         fs_read_deny: vec![],
         fs_protected: vec![],
         hooks: vec![],
+        budgets: Default::default(),
     }
 }
 

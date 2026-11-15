@@ -106,6 +106,7 @@ async fn agent_tool_is_advertised_and_honestly_unavailable() {
             fs_read_deny: vec![],
             fs_protected: vec![],
             hooks: vec![],
+            budgets: Default::default(),
         },
         provider.clone(),
         Arc::new(LocalApprover),

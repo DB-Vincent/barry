@@ -110,6 +110,7 @@ async fn bc_3_6_protected_path_inside_cwd_asks() {
             fs_read_deny: vec![],
             fs_protected: vec![],
             hooks: vec![],
+            budgets: Default::default(),
         },
         provider.clone(),
         approver,

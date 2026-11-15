@@ -68,6 +68,18 @@ struct Cli {
     /// Resume a session from a log file or a UUID/timestamp prefix
     #[arg(long = "resume")]
     resume: Option<String>,
+    /// Stop a run after this many input plus output tokens
+    #[arg(long = "max-tokens")]
+    max_tokens: Option<u64>,
+    /// Stop a run after this estimated cost in USD (needs token prices in config)
+    #[arg(long = "max-cost-usd")]
+    max_cost_usd: Option<f64>,
+    /// Stop a run after this many wall-clock seconds
+    #[arg(long = "max-wall-secs")]
+    max_wall_secs: Option<u64>,
+    /// Stop a run after this many cumulative seconds of bash commands
+    #[arg(long = "max-bash-secs")]
+    max_bash_secs: Option<u64>,
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -122,7 +134,7 @@ async fn main() -> ExitCode {
     run_helper_if_invoked();
 
     // Load config first; on error, exit 2 with a clean message.
-    let cfg = match Config::load() {
+    let mut cfg = match Config::load() {
         Ok(Some(cfg)) => cfg,
         Ok(None) => Config::default(),
         Err(err) => {
@@ -132,6 +144,17 @@ async fn main() -> ExitCode {
     };
 
     let cli = Cli::parse();
+
+    // Flags override the `[budgets]` config section.
+    let budgets = &mut cfg.budgets;
+    budgets.max_total_tokens = cli.max_tokens.or(budgets.max_total_tokens);
+    budgets.max_cost_usd = cli.max_cost_usd.or(budgets.max_cost_usd);
+    budgets.max_wall_secs = cli.max_wall_secs.or(budgets.max_wall_secs);
+    budgets.max_bash_secs = cli.max_bash_secs.or(budgets.max_bash_secs);
+    if let Err(message) = budgets.validate() {
+        eprintln!("config error: {message}");
+        return ExitCode::from(2);
+    }
 
     if let Some(command) = cli.command {
         return run_command(command);
@@ -341,6 +364,7 @@ async fn run_headless(
     match stop {
         StopReason::Stop if turn_limited => ExitCode::from(3),
         StopReason::Stop => ExitCode::SUCCESS,
+        StopReason::BudgetExceeded(_) => ExitCode::from(4),
         StopReason::Aborted | StopReason::Error(_) => ExitCode::from(1),
         StopReason::Length | StopReason::ToolCalls | StopReason::ContentFilter => ExitCode::from(1),
     }

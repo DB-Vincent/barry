@@ -86,6 +86,7 @@ fn config_with_hooks(hooks: Vec<HookConfig>) -> Config {
         fs_read_deny: vec![],
         fs_protected: vec![],
         hooks,
+        budgets: Default::default(),
     }
 }
 

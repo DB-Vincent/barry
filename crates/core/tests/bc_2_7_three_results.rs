@@ -121,6 +121,7 @@ async fn bc_2_7_three_results_in_call_order_when_one_fails() {
             fs_read_deny: vec![],
             fs_protected: vec![],
             hooks: vec![],
+            budgets: Default::default(),
         },
         provider.clone(),
         Arc::new(LocalApprover),

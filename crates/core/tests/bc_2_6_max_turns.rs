@@ -85,6 +85,7 @@ async fn bc_2_6_turn_limit_emits_notice_and_stops() {
             fs_read_deny: vec![],
             fs_protected: vec![],
             hooks: vec![],
+            budgets: Default::default(),
         },
         provider.clone(),
         Arc::new(LocalApprover),

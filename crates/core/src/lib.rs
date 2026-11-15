@@ -8,6 +8,7 @@ use std::pin::Pin;
 use barry_protocol::{ApprovalChoice, ApprovalRequest};
 
 pub mod agent;
+pub mod budget;
 pub mod config;
 pub mod context;
 pub mod hooks;

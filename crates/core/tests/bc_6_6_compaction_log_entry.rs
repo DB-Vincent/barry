@@ -74,6 +74,7 @@ async fn bc_6_6_compaction_writes_a_compaction_log_entry() {
         fs_read_deny: vec![],
         fs_protected: vec![],
         hooks: vec![],
+        budgets: Default::default(),
     };
 
     let dir = tempfile::tempdir().expect("tempdir");

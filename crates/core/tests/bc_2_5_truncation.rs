@@ -108,6 +108,7 @@ async fn bc_2_5_large_output_is_truncated() {
             fs_read_deny: vec![],
             fs_protected: vec![],
             hooks: vec![],
+            budgets: Default::default(),
         },
         provider.clone(),
         approver,

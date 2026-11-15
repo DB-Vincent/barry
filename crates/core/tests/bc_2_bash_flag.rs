@@ -113,6 +113,7 @@ async fn run_once(
             fs_read_deny: vec![],
             fs_protected: vec![],
             hooks: vec![],
+            budgets: Default::default(),
         },
         provider.clone(),
         approver,

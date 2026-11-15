@@ -20,6 +20,7 @@ fn config() -> Config {
         fs_read_deny: vec![],
         fs_protected: vec![".git".to_string()],
         hooks: vec![],
+        budgets: Default::default(),
     }
 }
 
