@@ -52,6 +52,7 @@ async fn bc_4_1_sandbox_blocks_outside_write_despite_approval() {
             sandbox_network: true,
             fs_read_deny: vec![],
             fs_protected: vec![],
+            hooks: vec![],
         },
         provider,
         approver.clone(),

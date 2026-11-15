@@ -23,6 +23,7 @@ fn config(network: bool) -> Config {
         sandbox_network: network,
         fs_read_deny: vec![],
         fs_protected: vec![],
+        hooks: vec![],
     }
 }
 

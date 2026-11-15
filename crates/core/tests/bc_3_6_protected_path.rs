@@ -109,6 +109,7 @@ async fn bc_3_6_protected_path_inside_cwd_asks() {
             sandbox_network: true,
             fs_read_deny: vec![],
             fs_protected: vec![],
+            hooks: vec![],
         },
         provider.clone(),
         approver,

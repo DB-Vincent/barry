@@ -122,6 +122,7 @@ async fn bc_3_3_grant_persists_in_session_same_dir_different_dir_asks() {
             sandbox_network: true,
             fs_read_deny: vec![],
             fs_protected: vec![],
+            hooks: vec![],
         },
         provider.clone(),
         approver_clone,

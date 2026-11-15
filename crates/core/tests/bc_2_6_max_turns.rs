@@ -84,6 +84,7 @@ async fn bc_2_6_turn_limit_emits_notice_and_stops() {
             sandbox_network: true,
             fs_read_deny: vec![],
             fs_protected: vec![],
+            hooks: vec![],
         },
         provider.clone(),
         Arc::new(LocalApprover),

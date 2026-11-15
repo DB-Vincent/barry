@@ -12,6 +12,7 @@ use futures::stream::StreamExt;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
+use crate::hooks::Hook;
 use crate::prompt::{system_prompt, PromptContext};
 use crate::session::{self, decided_by_label, decision_label, EntryKind, SessionError, SessionLog};
 use crate::tools::{execute_tool, tool_specs, ToolResult};
@@ -45,6 +46,8 @@ pub struct Agent {
     session: Option<SessionLog>,
     /// Whether a session-log write failure has already been reported.
     session_warned: bool,
+    /// Compiled PreToolUse hooks (PLAN 6.5).
+    hooks: Vec<Hook>,
 }
 
 impl Agent {
@@ -75,6 +78,12 @@ impl Agent {
         });
 
         let context_window = cfg.context_window;
+        let hooks: Vec<Hook> = cfg
+            .hooks
+            .iter()
+            .cloned()
+            .map(Hook::new)
+            .collect::<Result<Vec<Hook>, CoreError>>()?;
         Ok(Self {
             cfg,
             provider,
@@ -86,6 +95,7 @@ impl Agent {
             compactions: 0,
             session: None,
             session_warned: false,
+            hooks,
         })
     }
 
@@ -280,12 +290,29 @@ impl Agent {
         replaced.push(Message::User {
             content: format!("[Summary of earlier conversation]\n{summary}"),
         });
+        // PLAN 6.6: raw messages stay in the log; record what was compacted.
+        self.log(EntryKind::Compaction {
+            removed_seq_range: [0, self.history.len() as u64],
+            summary: summary.clone(),
+        });
         self.history = replaced;
 
         self.log(EntryKind::Notice {
             text: "summarised earlier conversation to save context".to_string(),
         });
         Ok(())
+    }
+
+    /// Force compaction of the conversation context (PLAN 6.7 `/compact`).
+    /// Runs the summarisation step if there is anything to compact, replacing
+    /// the history with a single summary message and writing a `compaction`
+    /// log entry. Returns `true` when a compaction was performed.
+    pub async fn compact(&mut self) -> Result<bool, CoreError> {
+        if self.history.is_empty() {
+            return Ok(false);
+        }
+        self.summarise().await?;
+        Ok(true)
     }
 
     pub async fn run_turn(
@@ -416,6 +443,7 @@ impl Agent {
                                         &self.approver,
                                         &cancel,
                                         self.session.as_mut(),
+                                        &self.hooks,
                                     )
                                     .await
                                     .unwrap_or_else(|err| ToolResult::internal_error(&err));

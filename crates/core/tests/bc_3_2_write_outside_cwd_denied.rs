@@ -107,6 +107,7 @@ async fn bc_3_2_write_outside_cwd_denied_by_user() {
             sandbox_network: true,
             fs_read_deny: vec![],
             fs_protected: vec![],
+            hooks: vec![],
         },
         provider.clone(),
         approver_clone,
