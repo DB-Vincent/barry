@@ -8,21 +8,34 @@
 
 use std::path::{Path, PathBuf};
 
+use super::instructions::wrap_untrusted;
+
 /// Build the skills section for the system prompt.
 ///
 /// `global_skills` is `~/.config/barry/skills` and `project_skills` is
 /// `<git root>/.barry/skills`. Directories that do not exist are skipped.
 pub fn skills_section(global_skills: &Path, project_skills: &Path) -> String {
-    let mut skills: Vec<(String, String, PathBuf)> = Vec::new(); // (name, description, path)
+    let mut global: Vec<(String, String, PathBuf)> = Vec::new(); // (name, description, path)
+    let mut project: Vec<(String, String, PathBuf)> = Vec::new();
 
-    collect_skills(global_skills, &mut skills);
-    collect_skills(project_skills, &mut skills);
+    collect_skills(global_skills, &mut global);
+    collect_skills(project_skills, &mut project);
 
-    if skills.is_empty() {
+    if global.is_empty() && project.is_empty() {
         return String::new();
     }
 
     let mut out = String::from("# Skills\nRead a skill's file with the read tool when relevant:\n");
+    out.push_str(&render_list(&global));
+    if !project.is_empty() {
+        // Repository skills are attacker-controlled on an untrusted checkout.
+        out.push_str(&wrap_untrusted(&render_list(&project)));
+    }
+    out
+}
+
+fn render_list(skills: &[(String, String, PathBuf)]) -> String {
+    let mut out = String::new();
     for (name, description, path) in skills {
         out.push_str(&format!("- {name}: {description} ({})\n", path.display()));
     }
@@ -124,5 +137,26 @@ mod tests {
         let global = tempfile::tempdir().unwrap();
         let project = tempfile::tempdir().unwrap();
         assert_eq!(skills_section(global.path(), project.path()), "");
+    }
+
+    #[test]
+    fn project_skills_are_wrapped_and_global_are_not() {
+        let global = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        for (root, name) in [(&global, "g-skill"), (&project, "p-skill")] {
+            let dir = root.path().join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("SKILL.md"), format!("---\nname: {name}\n---\n")).unwrap();
+        }
+        let section = skills_section(global.path(), project.path());
+        let open = section
+            .find("<untrusted_project_content>")
+            .expect("open tag");
+        let close = section
+            .find("</untrusted_project_content>")
+            .expect("close tag");
+        assert!(section.find("g-skill").unwrap() < open);
+        let p = section.find("p-skill").unwrap();
+        assert!(open < p && p < close, "{section}");
     }
 }
