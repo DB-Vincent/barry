@@ -6,7 +6,7 @@
 //! no warning at all: the user believed they had configured a deny that never
 //! existed.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use barry_policy::BashRule;
 use barry_protocol::Decision;
@@ -120,16 +120,35 @@ impl Default for Config {
     }
 }
 
+/// Where the config file lives when `$BARRY_CONFIG` is unset (#27).
+///
+/// `$XDG_CONFIG_HOME/barry/config.toml`, falling back to
+/// `~/.config/barry/config.toml` as the XDG spec says.
+pub fn default_config_path() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("XDG_CONFIG_HOME").filter(|dir| !dir.is_empty()) {
+        return Some(PathBuf::from(dir).join("barry/config.toml"));
+    }
+    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config/barry/config.toml"))
+}
+
 impl Config {
-    /// Load user config from `$BARRY_CONFIG`.
-    /// Returns `Ok(None)` if `BARRY_CONFIG` is not set (defaults apply).
+    /// Load the user config.
+    ///
+    /// `$BARRY_CONFIG` wins whenever it is set; otherwise the XDG path is
+    /// tried (#27). `Ok(None)` means there is no config file, so the built-in
+    /// defaults apply; a file that exists but does not parse is an error.
     pub fn load() -> Result<Option<Self>, ConfigError> {
-        let Ok(path) = std::env::var("BARRY_CONFIG") else {
-            return Ok(None);
-        };
+        match std::env::var("BARRY_CONFIG") {
+            Ok(path) => Self::load_from(Path::new(&path)),
+            Err(_) => match default_config_path() {
+                Some(path) => Self::load_from(&path),
+                None => Ok(None),
+            },
+        }
+    }
 
-        let path = Path::new(&path);
-
+    /// Load from an explicit path. A missing file is not an error.
+    pub fn load_from(path: &Path) -> Result<Option<Self>, ConfigError> {
         if !path.exists() {
             return Ok(None);
         }

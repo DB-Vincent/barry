@@ -84,6 +84,11 @@ enum Commands {
         #[command(subcommand)]
         command: LogCommands,
     },
+    /// Show the configuration in effect
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommands,
+    },
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -93,6 +98,12 @@ enum RulesCommands {
         /// The command to check
         command: String,
     },
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum ConfigCommands {
+    /// Print the effective config and the file it came from
+    Show,
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -217,6 +228,82 @@ fn run_command(command: Commands, cfg: &Config) -> ExitCode {
                 ExitCode::from(2)
             }
         },
+        Commands::Config { command } => match command {
+            ConfigCommands::Show => show_config(cfg),
+        },
+    }
+}
+
+/// `barry config show`: print the configuration in effect and the file it came
+/// from (#27).
+///
+/// Values are the merged result, so the built-in defaults are visible even when
+/// no file exists - which is the whole point when a user wonders why a read was
+/// denied or a network command refused.
+fn show_config(cfg: &Config) -> ExitCode {
+    let configured = std::env::var("BARRY_CONFIG")
+        .ok()
+        .map(PathBuf::from)
+        .or_else(barry_core::config::default_config_path);
+
+    match configured.as_ref() {
+        Some(path) if path.exists() => println!("config_file: {}", path.display()),
+        Some(path) => println!(
+            "config_file: none, built-in defaults applied (looked at {})",
+            path.display()
+        ),
+        None => println!("config_file: none, built-in defaults applied"),
+    }
+
+    println!("default_model: {}", cfg.default_model);
+    println!("max_turns: {}", cfg.max_turns);
+    println!("context_window: {}", cfg.context_window);
+    println!("sandbox.network: {}", cfg.sandbox_network);
+    println!("redaction.tool_output: {}", cfg.redact_tool_output);
+    println!("fs.read_deny: {}", list_or_none(&cfg.fs_read_deny));
+    println!("fs.protected: {}", list_or_none(&cfg.fs_protected));
+
+    if cfg.rules.is_empty() {
+        println!("rules: none");
+    }
+    for rule in &cfg.rules {
+        println!(
+            "rule: {} {:?} -> {}",
+            rule.id,
+            rule.r#match,
+            decision_name(&rule.decision)
+        );
+    }
+
+    if cfg.hooks.is_empty() {
+        println!("hooks: none");
+    }
+    for hook in &cfg.hooks {
+        println!(
+            "hook: {} -> {} (timeout {}s, fail_closed {})",
+            hook.matcher,
+            hook.command.join(" "),
+            hook.timeout_secs,
+            hook.fail_closed
+        );
+    }
+
+    ExitCode::SUCCESS
+}
+
+fn list_or_none(items: &[String]) -> String {
+    if items.is_empty() {
+        "none".to_string()
+    } else {
+        items.join(", ")
+    }
+}
+
+fn decision_name(decision: &barry_protocol::Decision) -> &'static str {
+    match decision {
+        barry_protocol::Decision::Allow => "allow",
+        barry_protocol::Decision::Deny { .. } => "deny",
+        barry_protocol::Decision::Ask { .. } => "ask",
     }
 }
 
