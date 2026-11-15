@@ -1,7 +1,7 @@
 //! Test utilities for barry.
-//! Provides Workspace, ScriptedProvider, ScriptedApprover, FakeLlm.
+//! Provides `Workspace`, `ScriptedProvider`, `ScriptedApprover`, `FakeLlm`.
 
-#![forbid(unsafe_code)]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 
 pub mod fake_llm;
 pub mod scripted;

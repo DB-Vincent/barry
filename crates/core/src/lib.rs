@@ -1,13 +1,9 @@
 //! Core agent loop for barry.
 
-#![forbid(unsafe_code)]
-
-use std::future::Future;
-use std::pin::Pin;
-
 use barry_protocol::{ApprovalChoice, ApprovalRequest};
 
 mod agent;
+pub(crate) mod bounded;
 pub mod config;
 mod context;
 mod hooks;
@@ -26,8 +22,8 @@ pub mod testing {
     pub use crate::redact::Redactor;
 }
 
-/// A future returned by [`Approver::decide`].
-pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+/// A boxed future, as returned by [`Approver::decide`].
+pub use futures::future::BoxFuture;
 
 /// Errors from the core agent.
 #[derive(Debug, thiserror::Error)]
@@ -36,6 +32,10 @@ pub enum CoreError {
     Config(String),
     #[error("provider error: {0}")]
     Provider(String),
+    /// A filesystem or process failure (#29). Kept apart from `Provider` so a
+    /// missing file is not reported as an LLM failure.
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
     #[error("not implemented: {0}")]
     NotImplemented(String),
     #[error("session error: {0}")]

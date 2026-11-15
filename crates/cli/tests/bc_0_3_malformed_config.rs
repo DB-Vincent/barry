@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-0.3 Given a malformed config file,
 /// when barry is invoked, then it exits 2 and names the file and line,
 /// with no Rust backtrace or panic text on stderr.

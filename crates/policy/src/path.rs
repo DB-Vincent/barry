@@ -14,6 +14,10 @@ use thiserror::Error;
 pub enum PathError {
     #[error("path escapes the working directory via `..`: {path:?}")]
     DotDot { path: PathBuf },
+    /// A symlink whose target does not exist. Its eventual target is unknowable,
+    /// so a later `open`/`write` could land anywhere; the path is refused.
+    #[error("path is a dangling symlink: {path:?}")]
+    DanglingSymlink { path: PathBuf },
     #[error("io error canonicalising {path:?}: {source}")]
     Io {
         path: PathBuf,
@@ -27,7 +31,14 @@ pub enum PathError {
 /// canonicalised with [`std::fs::canonicalize`], which resolves symlinks and
 /// `..`. Once a component does not exist, it (and all following components)
 /// are "remaining" and appended as-is. If any remaining component is `..`,
-/// the path is rejected.
+/// the path is rejected. A dangling symlink is rejected too: its future target
+/// is unknown, so appending it literally would let a later write escape.
+///
+/// # Errors
+///
+/// Returns [`PathError::DotDot`] if any component is `..`,
+/// [`PathError::DanglingSymlink`] if a symlink on the path has no target, and
+/// [`PathError::Io`] if an existing prefix cannot be canonicalised.
 pub fn canonicalise(cwd: &Path, path: &Path) -> Result<PathBuf, PathError> {
     let base = if path.is_absolute() {
         path.to_path_buf()
@@ -71,9 +82,29 @@ pub fn canonicalise(cwd: &Path, path: &Path) -> Result<PathBuf, PathError> {
                 }
             }
         } else {
-            found_missing = true;
-            remaining.push(component.as_os_str().to_os_string());
-            current = next;
+            // `Path::exists` follows symlinks, so a dangling link looks like a
+            // missing component and would be appended literally -- while a
+            // later `open` follows it. Ask the directory entry itself.
+            match std::fs::symlink_metadata(&next) {
+                Ok(meta) if meta.file_type().is_symlink() => {
+                    // The target does not exist, so its future location is
+                    // unknown. Refusing is the only safe answer.
+                    return Err(PathError::DanglingSymlink { path: next });
+                }
+                Ok(_) => {
+                    // Exists but the canonical form is unreadable (e.g. a
+                    // permission-denied ancestor); fail closed.
+                    return Err(PathError::Io {
+                        path: next,
+                        source: std::io::Error::other("cannot canonicalise existing path"),
+                    });
+                }
+                Err(_) => {
+                    found_missing = true;
+                    remaining.push(component.as_os_str().to_os_string());
+                    current = next;
+                }
+            }
         }
     }
 
@@ -87,6 +118,7 @@ pub fn canonicalise(cwd: &Path, path: &Path) -> Result<PathBuf, PathError> {
 }
 
 /// Returns `true` if `canonical` is inside `root` (or equal to it).
+#[must_use]
 pub fn is_under(canonical: &Path, root: &Path) -> bool {
     canonical.starts_with(root)
 }
