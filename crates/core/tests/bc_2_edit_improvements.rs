@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// `edit` supports `replace_all` and multiple edits per call, answers with a
 /// unified diff, and refuses a file that was not read first or that changed
 /// since it was read.
@@ -6,7 +8,7 @@ use barry_llm::{LlmEvent, LlmRequest};
 use barry_protocol::{Message, StopReason, ToolCall};
 use futures::channel::mpsc;
 use futures::stream::{self, StreamExt};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
@@ -67,6 +69,21 @@ fn text(t: &str) -> LlmEvent {
     }
 }
 
+/// A policy whose working directory is the temp dir, so the fixtures are
+/// writable without a prompt.
+fn policy() -> barry_policy::Policy {
+    barry_policy::Policy::new(barry_policy::PolicyConfig {
+        cwd: std::env::temp_dir(),
+        home: std::env::temp_dir().join("barry-test-policy-home"),
+        extra_writable: vec![],
+        read_deny: vec![],
+        protected: vec![],
+        rules: vec![],
+        network: true,
+    })
+    .expect("policy constructs")
+}
+
 /// Runs the scripted tool calls and returns `(ok, content)` per call.
 async fn run(calls: Vec<LlmEvent>) -> Vec<(bool, String)> {
     let mut replies = calls;
@@ -81,13 +98,16 @@ async fn run(calls: Vec<LlmEvent>) -> Vec<(bool, String)> {
             max_turns: 20,
             context_window: 32_768,
             sandbox_network: true,
+            sandbox_unsandboxed: true,
+            redact_tool_output: false,
             fs_read_deny: vec![],
             fs_protected: vec![],
+            rules: vec![],
             hooks: vec![],
         },
         provider.clone(),
         Arc::new(Yes),
-        None,
+        policy(),
     )
     .expect("agent constructs");
     let (tx, _rx) = mpsc::channel(256);

@@ -1,5 +1,7 @@
-/// BC-1.4 `finish_reason: "length"` gives StopReason::Length; `finish_reason:
-/// "stop"` with tool calls present gives ToolCalls.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
+/// BC-1.4 `finish_reason: "length"` gives `StopReason::Length`; `finish_reason:
+/// "stop"` with tool calls present gives `ToolCalls`.
 use barry_llm::{Compat, LlmEvent, LlmRequest, OpenAiProvider, Provider};
 use barry_protocol::{Message, StopReason};
 use barry_testkit::{FakeLlm, Reply};

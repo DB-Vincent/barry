@@ -1,7 +1,106 @@
-//! Pure helpers for the `edit` tool: argument parsing, applying edits in
-//! memory, and unified-diff output. No I/O happens here.
+//! The `edit` tool: argument parsing, applying edits in memory, and
+//! unified-diff output.
 
-use serde_json::Value;
+use std::fmt::Write as _;
+use std::path::Path;
+
+use barry_protocol::ToolSpec;
+use futures::future::BoxFuture;
+use serde_json::{Value, json};
+
+use super::write::write_file;
+use super::{Tool, ToolCtx, ToolResult, authorise_write};
+use crate::CoreError;
+use crate::context::truncate::truncate;
+
+pub(super) struct EditTool;
+
+impl Tool for EditTool {
+    fn spec(&self) -> ToolSpec {
+        ToolSpec {
+            name: "edit".to_string(),
+            description: "Replace text in a file you have read. Give old_string and new_string, or an edits array applied in order (all or nothing). old_string must match exactly once unless replace_all is true. Returns a unified diff. Fails if the file was not read first or changed since.".to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Path to the file" },
+                    "old_string": { "type": "string", "description": "Text to replace" },
+                    "new_string": { "type": "string", "description": "Replacement text" },
+                    "replace_all": {
+                        "type": "boolean",
+                        "description": "Replace every occurrence of old_string (default false)"
+                    },
+                    "edits": {
+                        "type": "array",
+                        "description": "Several replacements, applied in order. Use instead of old_string/new_string.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "old_string": { "type": "string" },
+                                "new_string": { "type": "string" },
+                                "replace_all": { "type": "boolean" }
+                            },
+                            "required": ["old_string", "new_string"]
+                        }
+                    }
+                },
+                "required": ["path"]
+            }),
+        }
+    }
+
+    fn execute<'a>(&'a self, ctx: ToolCtx<'a>) -> BoxFuture<'a, Result<ToolResult, CoreError>> {
+        Box::pin(run(ctx))
+    }
+}
+
+async fn run(mut ctx: ToolCtx<'_>) -> Result<ToolResult, CoreError> {
+    let path = ctx.str_arg("path");
+    match authorise_write(&mut ctx, "edit", &path).await? {
+        Ok(target) => edit_file(&mut ctx, &target).await,
+        Err(denied) => Ok(denied),
+    }
+}
+
+async fn edit_file(ctx: &mut ToolCtx<'_>, path: &Path) -> Result<ToolResult, CoreError> {
+    let shown = path.display().to_string();
+    let fail = |message: String| ToolResult::new(false, message.clone(), message);
+    let edits = match parse_edits(&ctx.arguments) {
+        Ok(edits) => edits,
+        Err(message) => return Ok(fail(format!("edit failed: {message}"))),
+    };
+    // Stale-edit guard: the model must have read the file, and it must not
+    // have changed since (by the user, a formatter, or a bash command).
+    if let Err(message) = ctx.reads.check_fresh(path) {
+        return Ok(fail(message));
+    }
+    let content = tokio::fs::read_to_string(path)
+        .await
+        .map_err(CoreError::Io)?;
+    let (new_content, replacements) = match apply_edits(&content, &edits) {
+        Ok(applied) => applied,
+        Err(message) => {
+            return Ok(fail(format!("{message} in {shown}; no changes made")));
+        }
+    };
+    write_file(path, &new_content)
+        .await
+        .map_err(CoreError::Io)?;
+    ctx.reads.record(path);
+
+    let diff = unified_diff(&shown, &content, &new_content);
+    let diff = truncate(&diff, 10_000);
+    let noun = if replacements == 1 {
+        "replacement"
+    } else {
+        "replacements"
+    };
+    Ok(ToolResult::new(
+        true,
+        format!("edited {shown}: {replacements} {noun}\n{diff}"),
+        format!("edited {shown}: {replacements} {noun}"),
+    ))
+}
 
 /// One replacement.
 #[derive(Debug, PartialEq, Eq)]
@@ -76,12 +175,7 @@ pub(super) fn apply_edits(content: &str, edits: &[Edit]) -> Result<(String, usiz
         }
         let count = current.matches(edit.old_string.as_str()).count();
         match count {
-            0 => {
-                return Err(format!(
-                    "{label}no matches found for '{}'",
-                    edit.old_string
-                ))
-            }
+            0 => return Err(format!("{label}no matches found for '{}'", edit.old_string)),
             1 => current = current.replacen(&edit.old_string, &edit.new_string, 1),
             n if edit.replace_all => {
                 current = current.replace(&edit.old_string, &edit.new_string);
@@ -91,7 +185,7 @@ pub(super) fn apply_edits(content: &str, edits: &[Edit]) -> Result<(String, usiz
                 return Err(format!(
                     "{label}found {n} matches for '{}'; add context to make it unique or set replace_all",
                     edit.old_string
-                ))
+                ));
             }
         }
         replacements += 1;
@@ -210,9 +304,7 @@ pub(super) fn unified_diff(path: &str, old: &str, new: &str) -> String {
         // An empty range is reported one line earlier, as `diff -u` does.
         let old_start = if old_len == 0 { os } else { os + 1 };
         let new_start = if new_len == 0 { ns } else { ns + 1 };
-        out.push_str(&format!(
-            "@@ -{old_start},{old_len} +{new_start},{new_len} @@\n"
-        ));
+        let _ = writeln!(out, "@@ -{old_start},{old_len} +{new_start},{new_len} @@");
         for (op, line) in slice {
             out.push(match op {
                 Op::Equal => ' ',
@@ -254,9 +346,11 @@ mod tests {
         assert!(parse_edits(&json!({})).is_err());
         assert!(parse_edits(&json!({"edits": []})).is_err());
         assert!(parse_edits(&json!({"edits": "x"})).is_err());
-        assert!(parse_edits(&json!({"edits":[{"old_string":"a"}]}))
-            .unwrap_err()
-            .contains("edit 1: missing string 'new_string'"));
+        assert!(
+            parse_edits(&json!({"edits":[{"old_string":"a"}]}))
+                .unwrap_err()
+                .contains("edit 1: missing string 'new_string'")
+        );
         assert!(
             parse_edits(&json!({"old_string":"a","new_string":"b","edits":[]}))
                 .unwrap_err()

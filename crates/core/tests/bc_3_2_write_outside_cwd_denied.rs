@@ -1,7 +1,9 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
+use barry_core::Agent;
 /// BC-3.2 Writing a file outside cwd asks for approval. If the user denies,
 /// the file is not created and the model is told "denied by user".
 use barry_core::config::Config;
-use barry_core::Agent;
 use barry_llm::{LlmEvent, LlmRequest};
 use barry_policy::{Policy, PolicyConfig};
 use barry_protocol::{Message, StopReason};
@@ -105,13 +107,16 @@ async fn bc_3_2_write_outside_cwd_denied_by_user() {
             max_turns: 10,
             context_window: 32_768,
             sandbox_network: true,
+            sandbox_unsandboxed: false,
+            redact_tool_output: false,
             fs_read_deny: vec![],
             fs_protected: vec![],
+            rules: vec![],
             hooks: vec![],
         },
         provider.clone(),
         approver_clone,
-        Some(policy),
+        policy,
     )
     .expect("agent constructs");
 
