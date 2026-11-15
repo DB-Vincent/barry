@@ -16,6 +16,8 @@ use crate::hooks::{Hook, HookOutcome};
 use crate::session::{decided_by_label, decision_label, EntryKind, SessionLog};
 use crate::{Approver, CoreError};
 
+mod search;
+
 /// The result of one tool call, before it becomes a [`barry_protocol::Message::Tool`].
 pub(crate) struct ToolResult {
     pub(crate) ok: bool,
@@ -118,6 +120,45 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                     "path": { "type": "string", "description": "Path to the file" }
                 },
                 "required": ["path"]
+            }),
+        },
+        ToolSpec {
+            name: "glob".to_string(),
+            description: "List files whose path matches a glob pattern (read-only, at most 1000 results)".to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "Glob such as \"*.rs\" (any depth) or \"src/**/*.rs\""
+                    },
+                    "path": { "type": "string", "description": "Directory to search (default: current directory)" }
+                },
+                "required": ["pattern"]
+            }),
+        },
+        ToolSpec {
+            name: "grep".to_string(),
+            description: "Search file contents with a regex and return path:line: text (read-only, at most 200 matches)".to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "pattern": { "type": "string", "description": "Regular expression" },
+                    "path": { "type": "string", "description": "File or directory to search (default: current directory)" },
+                    "glob": { "type": "string", "description": "Only search files whose path matches this glob" },
+                    "case_insensitive": { "type": "boolean", "description": "Ignore case (default false)" }
+                },
+                "required": ["pattern"]
+            }),
+        },
+        ToolSpec {
+            name: "ls".to_string(),
+            description: "List the entries of a directory; directories end in / (read-only)".to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Directory to list (default: current directory)" }
+                }
             }),
         },
         ToolSpec {
@@ -254,6 +295,9 @@ pub(crate) async fn execute_tool(
         "read" => {
             let path = arguments.get("path").and_then(|v| v.as_str()).unwrap_or("");
             execute_read_with_policy(path, policy, call, &mut log).await
+        }
+        "glob" | "grep" | "ls" => {
+            execute_search(&call.name, &arguments, policy, call, &mut log).await
         }
         "write" => execute_write_with_approval(call, policy, approver, cancel, &mut log).await,
         "edit" => execute_edit_with_approval(call, policy, approver, cancel, &mut log).await,
@@ -412,13 +456,15 @@ async fn execute_read(path: &str) -> Result<ToolResult, CoreError> {
     Ok(ToolResult::new(true, numbered.clone(), numbered))
 }
 
-/// Run a read through the policy check before reading the file.
-async fn execute_read_with_policy(
+/// Policy gate for the read-only tools: records the decision and returns a
+/// denial result when the path is not readable. `None` means go ahead.
+fn read_gate(
+    tool: &str,
     path: &str,
     policy: &Option<Policy>,
     call: &ToolCall,
     log: &mut Option<&mut SessionLog>,
-) -> Result<ToolResult, CoreError> {
+) -> Result<Option<ToolResult>, CoreError> {
     let decision = match policy {
         Some(policy) => policy.check_read(Path::new(path)),
         None => Decision::Allow,
@@ -426,6 +472,7 @@ async fn execute_read_with_policy(
     match decision {
         Decision::Allow => {
             record_decision(log, call, &Decision::Allow, &DecidedBy::Default)?;
+            Ok(None)
         }
         Decision::Deny { reason } => {
             record_decision(
@@ -436,11 +483,11 @@ async fn execute_read_with_policy(
                 },
                 &DecidedBy::Rule("read-deny".to_string()),
             )?;
-            return Ok(ToolResult::new(
+            Ok(Some(ToolResult::new(
                 false,
-                format!("read denied: {reason}"),
-                "read denied".to_string(),
-            ));
+                format!("{tool} denied: {reason}"),
+                format!("{tool} denied"),
+            )))
         }
         Decision::Ask { reason } => {
             record_decision(
@@ -451,15 +498,57 @@ async fn execute_read_with_policy(
                 },
                 &DecidedBy::Default,
             )?;
-            return Ok(ToolResult::new(
+            Ok(Some(ToolResult::new(
                 false,
-                format!("read requires approval: {reason}"),
-                "read requires approval".to_string(),
-            ));
+                format!("{tool} requires approval: {reason}"),
+                format!("{tool} requires approval"),
+            )))
         }
     }
+}
 
+/// Run a read through the policy check before reading the file.
+async fn execute_read_with_policy(
+    path: &str,
+    policy: &Option<Policy>,
+    call: &ToolCall,
+    log: &mut Option<&mut SessionLog>,
+) -> Result<ToolResult, CoreError> {
+    if let Some(denied) = read_gate("read", path, policy, call, log)? {
+        return Ok(denied);
+    }
     execute_read(path).await
+}
+
+/// Run `glob`, `grep` or `ls`. The search root goes through the read gate
+/// (one logged decision per call); `search` then applies the read policy to
+/// every entry it visits.
+async fn execute_search(
+    tool: &str,
+    arguments: &serde_json::Value,
+    policy: &Option<Policy>,
+    call: &ToolCall,
+    log: &mut Option<&mut SessionLog>,
+) -> Result<ToolResult, CoreError> {
+    let root = arguments
+        .get("path")
+        .and_then(|v| v.as_str())
+        .filter(|p| !p.is_empty())
+        .unwrap_or(".");
+    if let Some(denied) = read_gate(tool, root, policy, call, log)? {
+        return Ok(denied);
+    }
+    // The walk is blocking filesystem work: keep it off the async workers.
+    let tool = tool.to_string();
+    let arguments = arguments.clone();
+    let policy = policy.clone();
+    tokio::task::spawn_blocking(move || match tool.as_str() {
+        "glob" => search::run_glob(&arguments, &policy),
+        "grep" => search::run_grep(&arguments, &policy),
+        _ => search::run_ls(&arguments, &policy),
+    })
+    .await
+    .map_err(|e| CoreError::Provider(format!("search task failed: {e}")))
 }
 
 async fn execute_write(path: &str, content: &str) -> Result<ToolResult, CoreError> {

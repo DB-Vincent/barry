@@ -329,7 +329,7 @@ impl Agent {
             message: user_message,
         });
 
-        let tools = tool_specs(); // read, write, edit, bash, agent
+        let tools = tool_specs(); // read, glob, grep, ls, write, edit, bash, agent
 
         for _turn in 0..self.cfg.max_turns {
             events
