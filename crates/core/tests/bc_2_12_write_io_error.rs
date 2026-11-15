@@ -21,6 +21,7 @@ fn config() -> Config {
         max_turns: 10,
         context_window: 32_768,
         sandbox_network: false,
+        sandbox_unsandboxed: false,
         redact_tool_output: false,
         fs_read_deny: vec![],
         fs_protected: vec![],
@@ -64,7 +65,7 @@ async fn bc_29_write_error_is_reported_as_io() {
         config(),
         provider.clone(),
         Arc::new(ScriptedApprover::none()),
-        Some(policy(&ws)),
+        policy(&ws),
     )
     .expect("agent constructs");
 

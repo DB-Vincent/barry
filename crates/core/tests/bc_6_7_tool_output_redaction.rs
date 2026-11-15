@@ -22,6 +22,7 @@ fn config(redact_tool_output: bool) -> Config {
         max_turns: 10,
         context_window: 32_768,
         sandbox_network: false,
+        sandbox_unsandboxed: false,
         redact_tool_output,
         fs_read_deny: vec![],
         fs_protected: vec![],
@@ -64,7 +65,7 @@ async fn tool_content_for(redact_tool_output: bool) -> String {
         config(redact_tool_output),
         provider.clone(),
         Arc::new(ScriptedApprover::none()),
-        Some(policy(&ws)),
+        policy(&ws),
     )
     .expect("agent constructs");
 

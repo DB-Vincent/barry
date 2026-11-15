@@ -105,6 +105,7 @@ async fn bc_3_9_bash_always_this_session_persists_in_session() {
             max_turns: 10,
             context_window: 32_768,
             sandbox_network: true,
+            sandbox_unsandboxed: false,
             redact_tool_output: false,
             fs_read_deny: vec![],
             fs_protected: vec![],
@@ -113,7 +114,7 @@ async fn bc_3_9_bash_always_this_session_persists_in_session() {
         },
         provider.clone(),
         approver.clone(),
-        Some(policy),
+        policy,
     )
     .expect("agent constructs");
 
@@ -182,6 +183,7 @@ async fn bc_3_9_bash_always_this_session_persists_in_session() {
             max_turns: 10,
             context_window: 32_768,
             sandbox_network: true,
+            sandbox_unsandboxed: false,
             redact_tool_output: false,
             fs_read_deny: vec![],
             fs_protected: vec![],
@@ -190,7 +192,7 @@ async fn bc_3_9_bash_always_this_session_persists_in_session() {
         },
         provider2.clone(),
         approver2,
-        Some(policy2),
+        policy2,
     )
     .expect("agent constructs");
 

@@ -39,6 +39,10 @@ pub struct Config {
     pub context_window: u64,
     /// Sandbox: whether bash commands may access the network.
     pub sandbox_network: bool,
+    /// Sandbox: run bash without the OS sandbox at all (#30). Off by default.
+    /// When on, the session log records it and every command still goes
+    /// through the bash rules and approvals below.
+    pub sandbox_unsandboxed: bool,
     /// Filesystem: paths whose contents must never be read (expanded `~`,
     /// canonicalised where they exist).
     pub fs_read_deny: Vec<String>,
@@ -111,6 +115,7 @@ impl Default for Config {
             // directories are opt-in, because the output goes to the model
             // and the model may be remote (#10).
             sandbox_network: false,
+            sandbox_unsandboxed: false,
             fs_read_deny: default_read_deny(),
             fs_protected: default_protected(),
             redact_tool_output: false,
@@ -221,6 +226,7 @@ impl Config {
             max_turns: 50,
             context_window: 32_768,
             sandbox_network: file.sandbox.network,
+            sandbox_unsandboxed: file.sandbox.unsandboxed,
             fs_read_deny: file.fs.read_deny.unwrap_or_else(default_read_deny),
             fs_protected: file.fs.protected.unwrap_or_else(default_protected),
             redact_tool_output: file.redaction.tool_output,
@@ -253,6 +259,8 @@ struct FileConfig {
 #[serde(deny_unknown_fields, default)]
 struct SandboxSection {
     network: bool,
+    /// `sandbox.unsandboxed`: see [`Config::sandbox_unsandboxed`].
+    unsandboxed: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]

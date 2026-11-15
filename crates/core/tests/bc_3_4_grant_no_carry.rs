@@ -105,6 +105,7 @@ async fn bc_3_4_grant_does_not_carry_to_new_session() {
             max_turns: 10,
             context_window: 32_768,
             sandbox_network: true,
+            sandbox_unsandboxed: false,
             redact_tool_output: false,
             fs_read_deny: vec![],
             fs_protected: vec![],
@@ -113,7 +114,7 @@ async fn bc_3_4_grant_does_not_carry_to_new_session() {
         },
         provider1.clone(),
         approver1,
-        Some(policy1),
+        policy1,
     )
     .expect("agent constructs");
 
@@ -152,6 +153,7 @@ async fn bc_3_4_grant_does_not_carry_to_new_session() {
             max_turns: 10,
             context_window: 32_768,
             sandbox_network: true,
+            sandbox_unsandboxed: false,
             redact_tool_output: false,
             fs_read_deny: vec![],
             fs_protected: vec![],
@@ -160,7 +162,7 @@ async fn bc_3_4_grant_does_not_carry_to_new_session() {
         },
         provider2.clone(),
         approver2,
-        Some(policy2),
+        policy2,
     )
     .expect("agent constructs");
 

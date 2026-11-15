@@ -78,6 +78,7 @@ async fn bc_6_4_reported_usage_drives_the_context_estimate() {
             max_turns: 50,
             context_window: 20_000,
             sandbox_network: false,
+            sandbox_unsandboxed: true,
             redact_tool_output: false,
             fs_read_deny: vec![],
             fs_protected: vec![],
@@ -86,7 +87,7 @@ async fn bc_6_4_reported_usage_drives_the_context_estimate() {
         },
         provider.clone(),
         Arc::new(AlwaysAllow),
-        None,
+        permissive_policy(),
     )
     .expect("agent");
 
@@ -119,4 +120,20 @@ async fn bc_6_4_reported_usage_drives_the_context_estimate() {
         (30_000, 100),
         "the turn reports what the provider said"
     );
+}
+
+/// A policy with no rules and no read-deny, for tests that cover the turn loop
+/// and the tool plumbing rather than the policy engine (#30). It pre-approves
+/// nothing: a write outside its own cwd goes to the test approver.
+fn permissive_policy() -> barry_policy::Policy {
+    barry_policy::Policy::new(barry_policy::PolicyConfig {
+        cwd: std::env::temp_dir().join("barry-test-policy-cwd"),
+        home: std::env::temp_dir().join("barry-test-policy-home"),
+        extra_writable: vec![],
+        read_deny: vec![],
+        protected: vec![],
+        rules: vec![],
+        network: true,
+    })
+    .expect("policy constructs")
 }

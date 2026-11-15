@@ -183,25 +183,39 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
     ]
 }
 
+/// What a tool call needs from the agent (#30).
+///
+/// The policy is not optional. It used to be, and `None` meant unsandboxed
+/// bash with unrestricted reads and writes: the loop then had a mode where
+/// every restriction disappeared because a value was missing rather than
+/// because someone chose it. Running without the OS sandbox is now an explicit
+/// config flag (`sandbox.unsandboxed`) that the session log records.
+pub(crate) struct ToolContext<'a> {
+    pub policy: &'a mut Policy,
+    /// `sandbox.unsandboxed = true`: run bash without the OS sandbox.
+    pub unsandboxed: bool,
+    pub approver: &'a Arc<dyn Approver>,
+    pub cancel: &'a CancellationToken,
+    /// The agent's working directory, not the process's (#28).
+    pub cwd: &'a std::path::Path,
+    pub hooks: &'a [Hook],
+}
+
 pub(crate) async fn execute_tool(
     call: &ToolCall,
-    policy: &mut Option<Policy>,
-    approver: &Arc<dyn Approver>,
-    cancel: &CancellationToken,
+    ctx: &mut ToolContext<'_>,
     mut log: Option<&mut SessionLog>,
-    hooks: &[Hook],
-    cwd: &std::path::Path,
 ) -> Result<ToolResult, CoreError> {
     // PLAN 6.5: PreToolUse hooks run before the policy. A hook can deny or
     // block the tool, rewrite its input, or emit a warning.
     // The agent's working directory, not the process's (#28): a hook is told
     // where the agent operates, which is not necessarily where barry runs.
-    let cwd = cwd.display().to_string();
+    let cwd = ctx.cwd.display().to_string();
     let mut arguments = call.arguments.clone();
-    for hook in hooks.iter().filter(|h| h.matches(&call.name)) {
+    for hook in ctx.hooks.iter().filter(|h| h.matches(&call.name)) {
         let input = serde_json::to_string(&arguments).unwrap_or_default();
         match hook
-            .run_pre_tool_use(&call.name, &input, &cwd, "main", cancel)
+            .run_pre_tool_use(&call.name, &input, &cwd, "main", ctx.cancel)
             .await?
         {
             HookOutcome::Deny { reason } => {
@@ -255,7 +269,7 @@ pub(crate) async fn execute_tool(
                     reason: reason.clone(),
                     grant_path: None,
                 };
-                if approver.decide(&req).await == ApprovalChoice::Deny {
+                if ctx.approver.decide(&req).await == ApprovalChoice::Deny {
                     record_decision(
                         &mut log,
                         call,
@@ -277,15 +291,31 @@ pub(crate) async fn execute_tool(
     match call.name.as_str() {
         "read" => {
             let path = arguments.get("path").and_then(|v| v.as_str()).unwrap_or("");
-            execute_read_with_policy(path, policy, call, &mut log).await
+            execute_read_with_policy(path, ctx.policy, call, &mut log).await
         }
         // `arguments`, not `call.arguments`: a PreToolUse hook may have
         // rewritten the input, and the rewrite must be what runs.
         "write" => {
-            execute_write_with_approval(call, &arguments, policy, approver, cancel, &mut log).await
+            execute_write_with_approval(
+                call,
+                &arguments,
+                ctx.policy,
+                ctx.approver,
+                ctx.cancel,
+                &mut log,
+            )
+            .await
         }
         "edit" => {
-            execute_edit_with_approval(call, &arguments, policy, approver, cancel, &mut log).await
+            execute_edit_with_approval(
+                call,
+                &arguments,
+                ctx.policy,
+                ctx.approver,
+                ctx.cancel,
+                &mut log,
+            )
+            .await
         }
         "bash" => {
             let command = arguments
@@ -300,14 +330,10 @@ pub(crate) async fn execute_tool(
                 .map(|secs| secs.clamp(1, 600))
                 .unwrap_or(120);
 
-            // Policy check: deny > grant > ask > allow.
-            let Some(policy) = policy.as_mut() else {
-                // No policy → run unsandboxed (backstop for headless/cli
-                // without policy).
-                record_decision(&mut log, call, &Decision::Allow, &DecidedBy::Default)?;
-                return execute_bash_none(command, timeout_secs, cancel).await;
-            };
-            let (decision, rule_id) = policy.check_bash(command);
+            // Policy check: deny > grant > ask > allow. The policy decides
+            // even when the OS sandbox is off (#30): dropping the sandbox must
+            // not also drop the deny rules and approvals.
+            let (decision, rule_id) = ctx.policy.check_bash(command);
             let decided_by = match rule_id.as_deref() {
                 // A session prefix grant is a user decision, not a rule id.
                 Some(grant) if grant.starts_with("grant: ") => DecidedBy::User,
@@ -338,7 +364,7 @@ pub(crate) async fn execute_tool(
                         reason: reason.clone(),
                         grant_path: None,
                     };
-                    match approver.decide(&req).await {
+                    match ctx.approver.decide(&req).await {
                         ApprovalChoice::Deny => {
                             record_decision(
                                 &mut log,
@@ -359,49 +385,22 @@ pub(crate) async fn execute_tool(
                         // later command that starts with the same word.
                         ApprovalChoice::Once => {
                             record_decision(&mut log, call, &Decision::Allow, &DecidedBy::User)?;
-                            run_sandboxed_with_retry(
-                                policy,
-                                command,
-                                timeout_secs,
-                                cancel,
-                                approver,
-                                call.id.clone(),
-                                &mut log,
-                            )
-                            .await
+                            run_bash(ctx, command, timeout_secs, call.id.clone(), &mut log).await
                         }
                         ApprovalChoice::AlwaysThisSession => {
                             let prefix = session_prefix(command);
                             if let Some(prefix) = &prefix {
-                                policy.approve_prefix(prefix.clone());
+                                ctx.policy.approve_prefix(prefix.clone());
                                 record_prefix(&mut log, &prefix.join(" "))?;
                             }
                             record_decision(&mut log, call, &Decision::Allow, &DecidedBy::User)?;
-                            run_sandboxed_with_retry(
-                                policy,
-                                command,
-                                timeout_secs,
-                                cancel,
-                                approver,
-                                call.id.clone(),
-                                &mut log,
-                            )
-                            .await
+                            run_bash(ctx, command, timeout_secs, call.id.clone(), &mut log).await
                         }
                     }
                 }
                 Decision::Allow => {
                     record_decision(&mut log, call, &Decision::Allow, &decided_by)?;
-                    run_sandboxed_with_retry(
-                        policy,
-                        command,
-                        timeout_secs,
-                        cancel,
-                        approver,
-                        call.id.clone(),
-                        &mut log,
-                    )
-                    .await
+                    run_bash(ctx, command, timeout_secs, call.id.clone(), &mut log).await
                 }
             }
         }
@@ -470,12 +469,9 @@ async fn execute_read(path: &str) -> Result<ToolResult, CoreError> {
 /// The policy already canonicalised the path to decide; writing to that same
 /// canonical target means a symlink cannot be swapped in between the check and
 /// the write to redirect the bytes elsewhere.
-fn canonical_target(policy: &Option<Policy>, path: &str) -> Result<PathBuf, CoreError> {
-    match policy {
-        Some(policy) => barry_policy::canonicalise(policy.cwd(), Path::new(path))
-            .map_err(|e| CoreError::Provider(format!("cannot resolve path: {e}"))),
-        None => Ok(PathBuf::from(path)),
-    }
+fn canonical_target(policy: &Policy, path: &str) -> Result<PathBuf, CoreError> {
+    barry_policy::canonicalise(policy.cwd(), Path::new(path))
+        .map_err(|e| CoreError::Provider(format!("cannot resolve path: {e}")))
 }
 
 /// Write `content` to `target` atomically and without following a symlink at
@@ -516,14 +512,11 @@ async fn write_file(target: &Path, content: &str) -> std::io::Result<()> {
 /// Run a read through the policy check before reading the file.
 async fn execute_read_with_policy(
     path: &str,
-    policy: &Option<Policy>,
+    policy: &Policy,
     call: &ToolCall,
     log: &mut Option<&mut SessionLog>,
 ) -> Result<ToolResult, CoreError> {
-    let decision = match policy {
-        Some(policy) => policy.check_read(Path::new(path)),
-        None => Decision::Allow,
-    };
+    let decision = policy.check_read(Path::new(path));
     match decision {
         Decision::Allow => {
             record_decision(log, call, &Decision::Allow, &DecidedBy::Default)?;
@@ -634,20 +627,10 @@ async fn check_write_approval(
     call_id: &str,
     path: &str,
     tool: &str,
-    policy: &mut Option<Policy>,
+    policy: &mut Policy,
     approver: &Arc<dyn Approver>,
     _cancel: &CancellationToken,
 ) -> Result<WriteDecision, CoreError> {
-    // No policy configured → no restrictions.
-    let Some(policy) = policy.as_mut() else {
-        return Ok(WriteDecision {
-            allowed: true,
-            decision: Decision::Allow,
-            decided_by: DecidedBy::Default,
-            grant: None,
-        });
-    };
-
     let (decision, grant_dir) = policy.check_write(Path::new(path));
     match decision {
         Decision::Allow => {
@@ -728,7 +711,7 @@ fn denied_result(decision: &Decision) -> ToolResult {
 async fn execute_write_with_approval(
     call: &ToolCall,
     arguments: &serde_json::Value,
-    policy: &mut Option<Policy>,
+    policy: &mut Policy,
     approver: &Arc<dyn Approver>,
     cancel: &CancellationToken,
     log: &mut Option<&mut SessionLog>,
@@ -758,7 +741,7 @@ async fn execute_write_with_approval(
 async fn execute_edit_with_approval(
     call: &ToolCall,
     arguments: &serde_json::Value,
-    policy: &mut Option<Policy>,
+    policy: &mut Policy,
     approver: &Arc<dyn Approver>,
     cancel: &CancellationToken,
     log: &mut Option<&mut SessionLog>,
@@ -861,8 +844,12 @@ fn sandbox_denied_dir(_result: &ToolResult, command: &str) -> Option<std::path::
     None
 }
 
-/// Run bash directly (no sandbox). Used when no policy is configured.
-async fn execute_bash_none(
+/// Run bash directly, without the OS sandbox (#30).
+///
+/// Only reachable when the config says `sandbox.unsandboxed = true`, which the
+/// session log records at startup. Never a fallback for a missing policy or
+/// for a sandbox that failed to start: those fail closed.
+async fn run_bash_direct(
     command: &str,
     timeout_secs: u64,
     cancel: &CancellationToken,
@@ -1024,16 +1011,19 @@ fn sandbox_spec(policy: &Policy) -> SandboxSpec {
 /// sandbox denial message), offer the user a directory grant and retry once
 /// (PLAN 6.2, BC-4.2). If the user denies the grant, the original sandbox
 /// failure goes to the model unchanged.
-async fn run_sandboxed_with_retry(
-    policy: &mut Policy,
+async fn run_bash(
+    ctx: &mut ToolContext<'_>,
     command: &str,
     timeout_secs: u64,
-    cancel: &CancellationToken,
-    approver: &Arc<dyn Approver>,
     call_id: String,
     log: &mut Option<&mut SessionLog>,
 ) -> Result<ToolResult, CoreError> {
-    let first = execute_bash_sandboxed(sandbox_spec(policy), command, timeout_secs, cancel).await?;
+    if ctx.unsandboxed {
+        return run_bash_direct(command, timeout_secs, ctx.cancel).await;
+    }
+
+    let first =
+        execute_bash_sandboxed(sandbox_spec(ctx.policy), command, timeout_secs, ctx.cancel).await?;
     if !sandbox_denied(&first, command) {
         return Ok(first);
     }
@@ -1051,16 +1041,17 @@ async fn run_sandboxed_with_retry(
         grant_path: Some(target_dir.clone()),
     };
 
-    match approver.decide(&req).await {
+    match ctx.approver.decide(&req).await {
         // Denial: the model sees the original sandbox failure, not a generic
         // "denied by user", so it can reason about the actual block.
         ApprovalChoice::Deny => Ok(first),
         ApprovalChoice::Once | ApprovalChoice::AlwaysThisSession => {
-            policy
+            ctx.policy
                 .grant_dir(&target_dir)
                 .map_err(|e| CoreError::Provider(format!("failed to grant directory: {e}")))?;
             record_grant(log, &target_dir)?;
-            execute_bash_sandboxed(sandbox_spec(policy), command, timeout_secs, cancel).await
+            execute_bash_sandboxed(sandbox_spec(ctx.policy), command, timeout_secs, ctx.cancel)
+                .await
         }
     }
 }

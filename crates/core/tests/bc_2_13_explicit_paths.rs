@@ -22,6 +22,7 @@ fn config() -> Config {
         max_turns: 10,
         context_window: 32_768,
         sandbox_network: false,
+        sandbox_unsandboxed: false,
         redact_tool_output: false,
         fs_read_deny: vec![],
         fs_protected: vec![],
@@ -48,7 +49,7 @@ fn agent_for(ws: &Workspace, provider: Arc<ScriptedProvider>, cfg: Config) -> Ag
         cfg,
         provider,
         Arc::new(ScriptedApprover::none()),
-        Some(policy(ws)),
+        policy(ws),
         ws.cwd().to_path_buf(),
         ws.home().to_path_buf(),
     )

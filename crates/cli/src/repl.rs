@@ -198,7 +198,7 @@ pub(crate) async fn run(
                     return ExitCode::from(2);
                 }
             };
-            match Agent::resume(cfg, provider, approver.clone(), Some(policy), &path) {
+            match Agent::resume(cfg, provider, approver.clone(), policy, &path) {
                 Ok(agent) => agent,
                 Err(err) => {
                     eprintln!("{err}");
@@ -207,7 +207,7 @@ pub(crate) async fn run(
             }
         }
         None => {
-            let mut agent = match Agent::new(cfg, provider, approver.clone(), Some(policy)) {
+            let mut agent = match Agent::new(cfg, provider, approver.clone(), policy) {
                 Ok(agent) => agent,
                 Err(err) => {
                     eprintln!("{err}");
