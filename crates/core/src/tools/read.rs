@@ -31,13 +31,17 @@ impl Tool for ReadTool {
     }
 }
 
-/// Run a read through the policy check before reading the file.
-async fn run(mut ctx: ToolCtx<'_>) -> Result<ToolResult, CoreError> {
-    let path = ctx.str_arg("path");
-    let decision = ctx.policy.check_read(Path::new(&path));
-    match decision {
+/// Policy gate for the read-only tools: records the decision and returns a
+/// denial result when the path is not readable. `None` means go ahead.
+pub(super) fn read_gate(
+    ctx: &mut ToolCtx<'_>,
+    tool: &str,
+    path: &str,
+) -> Result<Option<ToolResult>, CoreError> {
+    match ctx.policy.check_read(Path::new(path)) {
         Decision::Allow => {
             ctx.record_decision(&Decision::Allow, &DecidedBy::Default)?;
+            Ok(None)
         }
         Decision::Deny { reason } => {
             ctx.record_decision(
@@ -46,11 +50,11 @@ async fn run(mut ctx: ToolCtx<'_>) -> Result<ToolResult, CoreError> {
                 },
                 &DecidedBy::Rule("read-deny".to_string()),
             )?;
-            return Ok(ToolResult::new(
+            Ok(Some(ToolResult::new(
                 false,
-                format!("read denied: {reason}"),
-                "read denied".to_string(),
-            ));
+                format!("{tool} denied: {reason}"),
+                format!("{tool} denied"),
+            )))
         }
         Decision::Ask { reason } => {
             ctx.record_decision(
@@ -59,11 +63,11 @@ async fn run(mut ctx: ToolCtx<'_>) -> Result<ToolResult, CoreError> {
                 },
                 &DecidedBy::Default,
             )?;
-            return Ok(ToolResult::new(
+            Ok(Some(ToolResult::new(
                 false,
-                format!("read requires approval: {reason}"),
-                "read requires approval".to_string(),
-            ));
+                format!("{tool} requires approval: {reason}"),
+                format!("{tool} requires approval"),
+            )))
         }
         // Decision is non-exhaustive: fail closed on a variant this code does
         // not know.
@@ -74,14 +78,21 @@ async fn run(mut ctx: ToolCtx<'_>) -> Result<ToolResult, CoreError> {
                 },
                 &DecidedBy::Default,
             )?;
-            return Ok(ToolResult::new(
+            Ok(Some(ToolResult::new(
                 false,
-                "read denied: unknown policy decision".to_string(),
-                "read denied".to_string(),
-            ));
+                format!("{tool} denied: unknown policy decision"),
+                format!("{tool} denied"),
+            )))
         }
     }
+}
 
+/// Run a read through the policy check before reading the file.
+async fn run(mut ctx: ToolCtx<'_>) -> Result<ToolResult, CoreError> {
+    let path = ctx.str_arg("path");
+    if let Some(denied) = read_gate(&mut ctx, "read", &path)? {
+        return Ok(denied);
+    }
     read_file(&path).await
 }
 

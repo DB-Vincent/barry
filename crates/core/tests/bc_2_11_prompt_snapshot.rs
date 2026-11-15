@@ -158,13 +158,16 @@ async fn bc_2_11_tool_list_is_exact_and_prompt_matches_snapshot() {
     let requests = provider.requests.lock().unwrap();
     assert!(requests.len() >= 2, "expected a follow-up request");
 
-    // Exactly the four implemented tools, in the order PLAN 5.1 lists them.
+    // Exactly these tools, in this order (PLAN 5.1 plus the read-only search tools).
     let names: Vec<&str> = requests[0]
         .tools
         .iter()
         .map(|spec| spec.name.as_str())
         .collect();
-    assert_eq!(names, ["read", "write", "edit", "bash"]);
+    assert_eq!(
+        names,
+        ["read", "glob", "grep", "ls", "write", "edit", "bash"]
+    );
 
     let system_of = |index: usize| -> String {
         match &requests[index].messages[0] {

@@ -9,6 +9,7 @@ mod agent;
 mod bash;
 mod edit;
 mod read;
+mod search;
 mod write;
 
 use std::path::{Path, PathBuf};
@@ -186,6 +187,9 @@ fn registry() -> &'static [Box<dyn Tool>] {
     REGISTRY.get_or_init(|| {
         vec![
             Box::new(read::ReadTool),
+            Box::new(search::GlobTool),
+            Box::new(search::GrepTool),
+            Box::new(search::LsTool),
             Box::new(write::WriteTool),
             Box::new(edit::EditTool),
             Box::new(bash::BashTool),
@@ -478,7 +482,10 @@ mod tests {
     #[test]
     fn registry_names_are_unique_and_ordered() {
         let names: Vec<String> = tool_specs().into_iter().map(|s| s.name).collect();
-        assert_eq!(names, ["read", "write", "edit", "bash"]);
+        assert_eq!(
+            names,
+            ["read", "glob", "grep", "ls", "write", "edit", "bash"]
+        );
     }
 
     #[test]
