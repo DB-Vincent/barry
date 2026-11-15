@@ -63,15 +63,3 @@ mod retry;
 mod sse;
 
 pub use openai::OpenAiProvider;
-
-impl std::fmt::Display for LlmEvent {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            LlmEvent::TextDelta(s) => write!(f, "TextDelta({s})"),
-            LlmEvent::ReasoningDelta(s) => write!(f, "ReasoningDelta({s})"),
-            LlmEvent::Done { stop, usage, .. } => {
-                write!(f, "Done{{stop={stop:?}, usage={usage:?}}}")
-            }
-        }
-    }
-}
