@@ -50,11 +50,14 @@ pub(super) fn read_gate(
                 },
                 &DecidedBy::Rule("read-deny".to_string()),
             )?;
-            Ok(Some(ToolResult::new(
-                false,
-                format!("{tool} denied: {reason}"),
-                format!("{tool} denied"),
-            )))
+            Ok(Some(
+                ToolResult::new(
+                    false,
+                    format!("{tool} denied: {reason}"),
+                    format!("{tool} denied"),
+                )
+                .denied(),
+            ))
         }
         Decision::Ask { reason } => {
             ctx.record_decision(
@@ -63,11 +66,14 @@ pub(super) fn read_gate(
                 },
                 &DecidedBy::Default,
             )?;
-            Ok(Some(ToolResult::new(
-                false,
-                format!("{tool} requires approval: {reason}"),
-                format!("{tool} requires approval"),
-            )))
+            Ok(Some(
+                ToolResult::new(
+                    false,
+                    format!("{tool} requires approval: {reason}"),
+                    format!("{tool} requires approval"),
+                )
+                .denied(),
+            ))
         }
         // Decision is non-exhaustive: fail closed on a variant this code does
         // not know.
@@ -78,11 +84,14 @@ pub(super) fn read_gate(
                 },
                 &DecidedBy::Default,
             )?;
-            Ok(Some(ToolResult::new(
-                false,
-                format!("{tool} denied: unknown policy decision"),
-                format!("{tool} denied"),
-            )))
+            Ok(Some(
+                ToolResult::new(
+                    false,
+                    format!("{tool} denied: unknown policy decision"),
+                    format!("{tool} denied"),
+                )
+                .denied(),
+            ))
         }
     }
 }

@@ -15,14 +15,15 @@ use url::Url;
 use barry_core::approval_file::PolicyFileApprover;
 use barry_core::config::Config;
 use barry_core::session::{self, SessionLog};
-use barry_core::{Agent, Approver, BoxFuture};
+use barry_core::{Agent, Approver, BoxFuture, RunStats};
 use barry_llm::{Compat, OpenAiProvider, Provider};
 use barry_policy::Policy;
-use barry_protocol::{ApprovalChoice, ApprovalRequest, Event, StopReason};
+use barry_protocol::{ApprovalChoice, ApprovalRequest, Event, RunSummary, StopReason};
 
 /// Default endpoint until PLAN 6.8 (named model profiles) lands in M6.
 const DEFAULT_BASE_URL: &str = "http://localhost:11434/v1";
 
+mod exit;
 mod render;
 mod repl;
 
@@ -153,7 +154,7 @@ async fn main() -> ExitCode {
         Ok(None) => Config::default(),
         Err(err) => {
             eprintln!("{err}");
-            return ExitCode::from(2);
+            return ExitCode::from(exit::CONFIG);
         }
     };
 
@@ -265,7 +266,7 @@ fn run_command(command: Commands, cfg: &Config) -> ExitCode {
             }
             None => {
                 eprintln!("error: `rules` requires a subcommand");
-                ExitCode::from(2)
+                ExitCode::from(exit::CONFIG)
             }
         },
         Commands::Config { command } => match command {
@@ -382,7 +383,7 @@ async fn run_headless(
         Ok(url) => url,
         Err(err) => {
             eprintln!("{err}");
-            return ExitCode::from(2);
+            return ExitCode::from(exit::CONFIG);
         }
     };
 
@@ -414,7 +415,7 @@ async fn run_headless(
                 Ok(path) => path,
                 Err(err) => {
                     eprintln!("{err}");
-                    return ExitCode::from(2);
+                    return ExitCode::from(exit::CONFIG);
                 }
             };
             match Agent::resume(cfg, provider, approver, policy, &path) {
@@ -445,7 +446,10 @@ async fn run_headless(
 
     let (tx, mut rx) = mpsc::channel(64);
     let cancel = CancellationToken::new();
-    let handle = tokio::spawn(async move { agent.run_turn(&prompt, tx, cancel).await });
+    let handle = tokio::spawn(async move {
+        let result = agent.run_turn(&prompt, tx, cancel).await;
+        (agent, result)
+    });
 
     let mut turn_limited = false;
     let mut wrote_text = false;
@@ -478,28 +482,46 @@ async fn run_headless(
         println!();
     }
 
-    let stop = match handle.await {
-        Ok(Ok(stop)) => stop,
-        Ok(Err(err)) => {
-            eprintln!("{err}");
-            return ExitCode::from(1);
-        }
-        Err(err) => {
-            eprintln!("agent task failed: {err}");
-            return ExitCode::from(1);
+    let (stats, outcome) = match handle.await {
+        Ok((agent, result)) => (
+            agent.run_stats().clone(),
+            result.map_err(|err| err.to_string()),
+        ),
+        Err(err) => (
+            RunStats::default(),
+            Err(format!("agent task failed: {err}")),
+        ),
+    };
+    let stop = match outcome {
+        Ok(stop) => stop,
+        Err(message) => {
+            eprintln!("{message}");
+            StopReason::Error(message)
         }
     };
 
-    // PLAN 6.9 exit codes.
-    match stop {
-        StopReason::Stop if turn_limited => ExitCode::from(3),
-        StopReason::Stop => ExitCode::SUCCESS,
-        StopReason::BudgetExceeded(_) => ExitCode::from(4),
-        // A turn stopped for lack of context did not answer the request, so it
-        // is reported like an abort rather than a success.
-        StopReason::Aborted | StopReason::ContextFull | StopReason::Error(_) => ExitCode::from(1),
-        StopReason::Length | StopReason::ToolCalls | StopReason::ContentFilter => ExitCode::from(1),
-        // StopReason is non-exhaustive: an unknown reason is a failure.
-        _ => ExitCode::from(1),
+    // PLAN 6.9 exit codes, extended in `exit`.
+    let code = exit::for_run(&stop, turn_limited, stats.denied_actions);
+
+    if json {
+        // The last line of `--json` output: what a CI job or orchestrator
+        // needs without replaying every event.
+        let summary = Event::RunSummary(RunSummary {
+            stop_reason: stop,
+            exit_code: code,
+            turn_limit_reached: turn_limited,
+            denied_actions: stats.denied_actions,
+            usage: stats.usage,
+            files_changed: stats.files_changed.into_iter().collect(),
+        });
+        match serde_json::to_string(&summary) {
+            Ok(line) => println!("{line}"),
+            Err(err) => {
+                eprintln!("failed to serialize summary: {err}");
+                return ExitCode::from(exit::FAILURE);
+            }
+        }
     }
+
+    ExitCode::from(code)
 }

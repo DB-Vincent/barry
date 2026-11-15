@@ -87,6 +87,23 @@ pub struct Usage {
     pub output_tokens: u64,
 }
 
+/// The final report of a headless run, for CI and orchestrators.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RunSummary {
+    pub stop_reason: StopReason,
+    /// The process exit code this run ends with.
+    pub exit_code: u8,
+    /// Whether the run stopped because it hit the turn limit.
+    pub turn_limit_reached: bool,
+    /// Tool calls refused by policy, a hook, or the approver.
+    pub denied_actions: u64,
+    /// Token usage summed over the run, when the provider reported it.
+    pub usage: Option<Usage>,
+    /// Absolute paths changed through the write and edit tools. Changes made
+    /// by bash commands are not tracked.
+    pub files_changed: Vec<PathBuf>,
+}
+
 /// The policy decision for a tool or command.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[non_exhaustive]
@@ -152,4 +169,6 @@ pub enum Event {
         stop: StopReason,
         usage: Option<Usage>,
     },
+    /// The last event of a headless `--json` run.
+    RunSummary(RunSummary),
 }

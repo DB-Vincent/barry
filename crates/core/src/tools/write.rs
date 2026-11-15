@@ -40,11 +40,13 @@ async fn run(mut ctx: ToolCtx<'_>) -> Result<ToolResult, CoreError> {
             write_file(&target, &content).await.map_err(CoreError::Io)?;
             // The model knows what it wrote, so it may edit the file next.
             ctx.reads.record(&target);
-            Ok(ToolResult::new(
+            let mut result = ToolResult::new(
                 true,
                 format!("wrote {} bytes to {}", content.len(), target.display()),
                 format!("wrote {} bytes to {}", content.len(), target.display()),
-            ))
+            );
+            result.changed = Some(target);
+            Ok(result)
         }
         Err(denied) => Ok(denied),
     }

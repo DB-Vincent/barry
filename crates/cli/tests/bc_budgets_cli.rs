@@ -40,7 +40,12 @@ async fn max_tokens_flag_exits_4_and_reports_the_stop_in_json() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let last: serde_json::Value =
         serde_json::from_str(stdout.lines().last().expect("output")).expect("json");
-    assert_eq!(last["TurnFinished"]["stop"]["BudgetExceeded"], "Tokens");
+    // The last line is the run summary (#37), which carries the stop reason.
+    assert_eq!(
+        last["RunSummary"]["stop_reason"]["BudgetExceeded"],
+        "Tokens"
+    );
+    assert_eq!(last["RunSummary"]["exit_code"], 4);
 }
 
 #[tokio::test(flavor = "multi_thread")]

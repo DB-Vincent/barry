@@ -35,6 +35,10 @@ pub(crate) struct ToolResult {
     pub(crate) exit_code: Option<i32>,
     /// Time spent running a bash command, for the bash-time budget.
     pub(crate) bash_time: Duration,
+    /// The call was refused by policy, a hook, or the approver.
+    pub(crate) denied: bool,
+    /// The file this call changed, as an absolute path.
+    pub(crate) changed: Option<PathBuf>,
 }
 
 impl ToolResult {
@@ -45,7 +49,14 @@ impl ToolResult {
             display,
             exit_code: None,
             bash_time: Duration::ZERO,
+            denied: false,
+            changed: None,
         }
+    }
+
+    fn denied(mut self) -> Self {
+        self.denied = true;
+        self
     }
 
     fn with_exit_code(mut self, exit_code: Option<i32>) -> Self {
@@ -340,11 +351,14 @@ async fn run_pre_tool_use_hooks(
                     },
                     &DecidedBy::Hook("pre-tool-use".to_string()),
                 )?;
-                return Ok(Some(ToolResult::new(
-                    false,
-                    format!("hook denied: {reason}"),
-                    "hook denied".to_string(),
-                )));
+                return Ok(Some(
+                    ToolResult::new(
+                        false,
+                        format!("hook denied: {reason}"),
+                        "hook denied".to_string(),
+                    )
+                    .denied(),
+                ));
             }
             HookOutcome::Block { reason } => {
                 ctx.record_decision(
@@ -353,11 +367,14 @@ async fn run_pre_tool_use_hooks(
                     },
                     &DecidedBy::Hook("pre-tool-use".to_string()),
                 )?;
-                return Ok(Some(ToolResult::new(
-                    false,
-                    format!("hook blocked: {reason}"),
-                    "hook blocked".to_string(),
-                )));
+                return Ok(Some(
+                    ToolResult::new(
+                        false,
+                        format!("hook blocked: {reason}"),
+                        "hook blocked".to_string(),
+                    )
+                    .denied(),
+                ));
             }
             HookOutcome::UpdatedInput { input } => {
                 if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&input) {
@@ -390,11 +407,14 @@ async fn run_pre_tool_use_hooks(
                         },
                         &DecidedBy::User,
                     )?;
-                    return Ok(Some(ToolResult::new(
-                        false,
-                        format!("denied by user (hook asked: {reason})"),
-                        "denied by user".to_string(),
-                    )));
+                    return Ok(Some(
+                        ToolResult::new(
+                            false,
+                            format!("denied by user (hook asked: {reason})"),
+                            "denied by user".to_string(),
+                        )
+                        .denied(),
+                    ));
                 }
             }
             HookOutcome::Allow => {}
@@ -508,7 +528,7 @@ fn denied_result(decision: &Decision) -> ToolResult {
         Decision::Deny { reason } => reason.clone(),
         _ => "denied by user".to_string(),
     };
-    ToolResult::new(false, reason.clone(), reason)
+    ToolResult::new(false, reason.clone(), reason).denied()
 }
 
 /// Resolve the path a write or edit will really touch.

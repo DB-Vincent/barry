@@ -142,8 +142,10 @@ async fn configured_deny_rule_blocks_bash_in_headless() {
         .output()
         .expect("barry runs");
 
-    assert!(
-        out.status.success(),
+    // The run finished, but the rule denied an action, so it exits 5 (#37).
+    assert_eq!(
+        out.status.code(),
+        Some(5),
         "stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );

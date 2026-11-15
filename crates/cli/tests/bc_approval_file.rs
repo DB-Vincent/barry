@@ -143,7 +143,8 @@ async fn writes_outside_the_cwd_need_a_matching_rule() {
     )
     .await;
 
-    assert_eq!(r.out.status.code(), Some(0), "{:?}", r.out);
+    // One write was refused, so the run exits 5 (#37) instead of 0.
+    assert_eq!(r.out.status.code(), Some(5), "{:?}", r.out);
     assert!(allowed.exists());
     assert!(!refused.exists());
 }

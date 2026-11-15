@@ -100,7 +100,8 @@ async fn run(ctx: ToolCtx<'_>) -> Result<ToolResult, CoreError> {
                 false,
                 format!("bash denied: {reason}"),
                 "bash denied".to_string(),
-            ))
+            )
+            .denied())
         }
         Decision::Ask { reason } => {
             let req = ApprovalRequest {
@@ -124,11 +125,7 @@ async fn run(ctx: ToolCtx<'_>) -> Result<ToolResult, CoreError> {
                         },
                         &source,
                     )?;
-                    Ok(ToolResult::new(
-                        false,
-                        message.to_string(),
-                        message.to_string(),
-                    ))
+                    Ok(ToolResult::new(false, message.to_string(), message.to_string()).denied())
                 }
                 // "Once" runs this one command and records nothing:
                 // approving on demand must not silently approve every
@@ -191,7 +188,8 @@ async fn run(ctx: ToolCtx<'_>) -> Result<ToolResult, CoreError> {
                 false,
                 "bash denied: unknown policy decision".to_string(),
                 "bash denied".to_string(),
-            ))
+            )
+            .denied())
         }
     }
 }
@@ -519,7 +517,10 @@ async fn run_bash(
     match ctx.approver.decide(&req).await {
         // Denial: the model sees the original sandbox failure, not a generic
         // "denied by user", so it can reason about the actual block.
-        ApprovalChoice::Deny => Ok(first),
+        ApprovalChoice::Deny => Ok(ToolResult {
+            denied: true,
+            ..first
+        }),
         ApprovalChoice::Once | ApprovalChoice::AlwaysThisSession => {
             ctx.grants
                 .grant_dir(ctx.policy, &target_dir)

@@ -1,5 +1,6 @@
 //! The turn loop: request, stream, dispatch tools, feed results back.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -24,6 +25,17 @@ use crate::{Approver, CoreError};
 /// `tools` because it is a property of the message, not of the tool.
 fn wrap_tool_output(tool: &str, ok: bool, content: &str) -> String {
     format!("<tool_output tool=\"{tool}\" ok=\"{ok}\">\n{content}\n</tool_output>")
+}
+
+/// What one `run_turn` did, for a final report.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RunStats {
+    /// Tool calls refused by policy, a hook, or the approver.
+    pub denied_actions: u64,
+    /// Absolute paths changed through the write and edit tools, sorted.
+    pub files_changed: BTreeSet<PathBuf>,
+    /// Token usage summed over the run, when the provider reported any.
+    pub usage: Option<Usage>,
 }
 
 /// The one-line description shown while a tool runs (#20).
@@ -109,6 +121,8 @@ pub struct Agent {
     redactor: Redactor,
     /// Compiled `PreToolUse` hooks (PLAN 6.5).
     hooks: Vec<Hook>,
+    /// Totals for the latest `run_turn`.
+    stats: RunStats,
     /// Budget totals for the current `run_turn`.
     budget: BudgetTracker,
     /// Files the model has read or written, for the `edit` stale check.
@@ -198,6 +212,7 @@ impl Agent {
             session_warned: false,
             redactor: Redactor::from_env(),
             hooks,
+            stats: RunStats::default(),
             budget,
             reads: ReadState::default(),
         })
@@ -565,6 +580,7 @@ impl Agent {
 
         let tools = tool_specs(); // read, glob, grep, ls, write, edit, bash
         self.budget = BudgetTracker::new(self.cfg.budgets.clone());
+        self.stats = RunStats::default();
 
         for _turn in 0..self.cfg.max_turns {
             if let Some(exceeded) = self.budget.exceeded() {
@@ -630,6 +646,16 @@ impl Agent {
                         stop,
                         usage,
                     } => {
+                        if let Some(usage) = &usage {
+                            let total = self.stats.usage.get_or_insert(Usage {
+                                input_tokens: 0,
+                                output_tokens: 0,
+                            });
+                            total.input_tokens =
+                                total.input_tokens.saturating_add(usage.input_tokens);
+                            total.output_tokens =
+                                total.output_tokens.saturating_add(usage.output_tokens);
+                        }
                         // Prefer the provider's numbers; otherwise estimate at
                         // 4 bytes per token so a budget still applies.
                         self.budget.add_usage(&usage.clone().unwrap_or(Usage {
@@ -736,6 +762,12 @@ impl Agent {
                                             .await
                                             .unwrap_or_else(|err| ToolResult::internal_error(&err));
                                     self.budget.add_bash(result.bash_time);
+                                    if result.denied {
+                                        self.stats.denied_actions += 1;
+                                    }
+                                    if let Some(path) = &result.changed {
+                                        self.stats.files_changed.insert(path.clone());
+                                    }
 
                                     events
                                         .send(Event::ToolFinished {
@@ -821,6 +853,12 @@ impl Agent {
             .await
             .map_err(|_| CoreError::ChannelClosed)?;
         Ok(StopReason::Stop)
+    }
+
+    /// Totals for the latest `run_turn`: denials, changed files, usage.
+    #[must_use]
+    pub fn run_stats(&self) -> &RunStats {
+        &self.stats
     }
 
     /// The audit log path, when this agent is recording a session.

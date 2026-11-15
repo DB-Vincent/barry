@@ -13,7 +13,7 @@ mod prompt;
 mod redact;
 pub mod session;
 mod tools;
-pub use agent::Agent;
+pub use agent::{Agent, RunStats};
 
 /// Internals re-exported for this crate's integration tests only. Not part of
 /// the supported API and may change without notice.

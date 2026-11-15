@@ -95,11 +95,13 @@ async fn edit_file(ctx: &mut ToolCtx<'_>, path: &Path) -> Result<ToolResult, Cor
     } else {
         "replacements"
     };
-    Ok(ToolResult::new(
+    let mut result = ToolResult::new(
         true,
         format!("edited {shown}: {replacements} {noun}\n{diff}"),
         format!("edited {shown}: {replacements} {noun}"),
-    ))
+    );
+    result.changed = Some(path.to_path_buf());
+    Ok(result)
 }
 
 /// One replacement.
