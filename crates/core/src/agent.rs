@@ -15,7 +15,7 @@ use crate::config::Config;
 use crate::hooks::Hook;
 use crate::prompt::{system_prompt, PromptContext};
 use crate::session::{self, decided_by_label, decision_label, EntryKind, SessionError, SessionLog};
-use crate::tools::{execute_tool, tool_specs, ToolResult};
+use crate::tools::{execute_tool, tool_specs, ReadState, ToolResult};
 use crate::{Approver, CoreError};
 
 /// Wraps a tool result for the model (PLAN 5). Kept here rather than in
@@ -48,6 +48,8 @@ pub struct Agent {
     session_warned: bool,
     /// Compiled PreToolUse hooks (PLAN 6.5).
     hooks: Vec<Hook>,
+    /// Files the model has read or written, for the `edit` stale check.
+    reads: ReadState,
 }
 
 impl Agent {
@@ -96,6 +98,7 @@ impl Agent {
             session: None,
             session_warned: false,
             hooks,
+            reads: ReadState::default(),
         })
     }
 
@@ -438,12 +441,12 @@ impl Agent {
                                     // A tool error is a result, not a turn failure.
                                     let result = execute_tool(
                                         call,
-                                        &self.cfg,
                                         &mut self.policy,
                                         &self.approver,
                                         &cancel,
                                         self.session.as_mut(),
                                         &self.hooks,
+                                        &mut self.reads,
                                     )
                                     .await
                                     .unwrap_or_else(|err| ToolResult::internal_error(&err));

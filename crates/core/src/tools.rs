@@ -1,8 +1,9 @@
 //! Tool specs advertised to the model, and the executors behind them.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use barry_policy::Policy;
 use barry_protocol::{ApprovalChoice, ApprovalRequest, DecidedBy, Decision, ToolCall, ToolSpec};
@@ -10,11 +11,12 @@ use barry_sandbox::{self as sandbox, SandboxSpec};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
-use crate::config::Config;
 use crate::context::truncate;
 use crate::hooks::{Hook, HookOutcome};
 use crate::session::{decided_by_label, decision_label, EntryKind, SessionLog};
 use crate::{Approver, CoreError};
+
+mod edit;
 
 /// The result of one tool call, before it becomes a [`barry_protocol::Message::Tool`].
 pub(crate) struct ToolResult {
@@ -57,6 +59,58 @@ impl ToolResult {
             format!("internal tool error: {err}"),
             "internal tool error".to_string(),
         )
+    }
+}
+
+/// Modification time and size of a file when the model last saw it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct FileStamp {
+    modified: SystemTime,
+    len: u64,
+}
+
+impl FileStamp {
+    fn of(path: &Path) -> Option<Self> {
+        let meta = std::fs::metadata(path).ok()?;
+        Some(Self {
+            modified: meta.modified().ok()?,
+            len: meta.len(),
+        })
+    }
+}
+
+/// Which files the model has read (or written) and what they looked like then.
+/// `edit` refuses a file it has no record of, or one that changed since.
+#[derive(Default)]
+pub(crate) struct ReadState {
+    seen: HashMap<PathBuf, FileStamp>,
+}
+
+impl ReadState {
+    fn key(path: &str) -> PathBuf {
+        std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path))
+    }
+
+    /// Remember the file as it is on disk now.
+    fn record(&mut self, path: &str) {
+        if let Some(stamp) = FileStamp::of(Path::new(path)) {
+            self.seen.insert(Self::key(path), stamp);
+        }
+    }
+
+    /// `Err` carries the message for the model when an edit must not proceed.
+    fn check_fresh(&self, path: &str) -> Result<(), String> {
+        let Some(recorded) = self.seen.get(&Self::key(path)) else {
+            return Err(format!(
+                "{path} has not been read in this session; read it before editing"
+            ));
+        };
+        if FileStamp::of(Path::new(path)) != Some(*recorded) {
+            return Err(format!(
+                "{path} changed since it was last read; read it again before editing"
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -134,15 +188,32 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "edit".to_string(),
-            description: "Replace old_string with new_string in a file".to_string(),
+            description: "Replace text in a file you have read. Give old_string and new_string, or an edits array applied in order (all or nothing). old_string must match exactly once unless replace_all is true. Returns a unified diff. Fails if the file was not read first or changed since.".to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
                     "path": { "type": "string", "description": "Path to the file" },
                     "old_string": { "type": "string", "description": "Text to replace" },
-                    "new_string": { "type": "string", "description": "Replacement text" }
+                    "new_string": { "type": "string", "description": "Replacement text" },
+                    "replace_all": {
+                        "type": "boolean",
+                        "description": "Replace every occurrence of old_string (default false)"
+                    },
+                    "edits": {
+                        "type": "array",
+                        "description": "Several replacements, applied in order. Use instead of old_string/new_string.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "old_string": { "type": "string" },
+                                "new_string": { "type": "string" },
+                                "replace_all": { "type": "boolean" }
+                            },
+                            "required": ["old_string", "new_string"]
+                        }
+                    }
                 },
-                "required": ["path", "old_string", "new_string"]
+                "required": ["path"]
             }),
         },
         ToolSpec {
@@ -188,12 +259,12 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
 
 pub(crate) async fn execute_tool(
     call: &ToolCall,
-    _cfg: &Config,
     policy: &mut Option<Policy>,
     approver: &Arc<dyn Approver>,
     cancel: &CancellationToken,
     mut log: Option<&mut SessionLog>,
     hooks: &[Hook],
+    reads: &mut ReadState,
 ) -> Result<ToolResult, CoreError> {
     // PLAN 6.5: PreToolUse hooks run before the policy. A hook can deny or
     // block the tool, rewrite its input, or emit a warning.
@@ -253,10 +324,12 @@ pub(crate) async fn execute_tool(
     match call.name.as_str() {
         "read" => {
             let path = arguments.get("path").and_then(|v| v.as_str()).unwrap_or("");
-            execute_read_with_policy(path, policy, call, &mut log).await
+            execute_read_with_policy(path, policy, call, &mut log, reads).await
         }
-        "write" => execute_write_with_approval(call, policy, approver, cancel, &mut log).await,
-        "edit" => execute_edit_with_approval(call, policy, approver, cancel, &mut log).await,
+        "write" => {
+            execute_write_with_approval(call, policy, approver, cancel, &mut log, reads).await
+        }
+        "edit" => execute_edit_with_approval(call, policy, approver, cancel, &mut log, reads).await,
         "bash" => {
             let command = arguments
                 .get("command")
@@ -418,6 +491,7 @@ async fn execute_read_with_policy(
     policy: &Option<Policy>,
     call: &ToolCall,
     log: &mut Option<&mut SessionLog>,
+    reads: &mut ReadState,
 ) -> Result<ToolResult, CoreError> {
     let decision = match policy {
         Some(policy) => policy.check_read(Path::new(path)),
@@ -459,7 +533,9 @@ async fn execute_read_with_policy(
         }
     }
 
-    execute_read(path).await
+    let result = execute_read(path).await?;
+    reads.record(path);
+    Ok(result)
 }
 
 async fn execute_write(path: &str, content: &str) -> Result<ToolResult, CoreError> {
@@ -473,39 +549,41 @@ async fn execute_write(path: &str, content: &str) -> Result<ToolResult, CoreErro
 
 async fn execute_edit(
     path: &str,
-    old_string: &str,
-    new_string: &str,
+    arguments: &serde_json::Value,
+    reads: &mut ReadState,
 ) -> Result<ToolResult, CoreError> {
-    let content = std::fs::read_to_string(path).map_err(|e| CoreError::Provider(e.to_string()))?;
-    let count = content.matches(old_string).count();
-
-    match count {
-        0 => Ok(ToolResult::new(
-            false,
-            format!("no matches found for '{}' in {}", old_string, path),
-            format!("no matches found for '{}'", old_string),
-        )),
-        1 => {
-            let new_content = content.replacen(old_string, new_string, 1);
-            std::fs::write(path, &new_content).map_err(|e| CoreError::Provider(e.to_string()))?;
-            Ok(ToolResult::new(
-                true,
-                format!(
-                    "replaced 1 occurrence of '{}' with '{}' in {}",
-                    old_string, new_string, path
-                ),
-                format!("replaced '{}' with '{}'", old_string, new_string),
-            ))
-        }
-        n => Ok(ToolResult::new(
-            false,
-            format!(
-                "found {} matches for '{}' in {}; no changes made",
-                n, old_string, path
-            ),
-            format!("found {} matches for '{}'; no changes made", n, old_string),
-        )),
+    let fail = |message: String| ToolResult::new(false, message.clone(), message);
+    let edits = match edit::parse_edits(arguments) {
+        Ok(edits) => edits,
+        Err(message) => return Ok(fail(format!("edit failed: {message}"))),
+    };
+    // Stale-edit guard: the model must have read the file, and it must not
+    // have changed since (by the user, a formatter, or a bash command).
+    if let Err(message) = reads.check_fresh(path) {
+        return Ok(fail(message));
     }
+    let content = std::fs::read_to_string(path).map_err(|e| CoreError::Provider(e.to_string()))?;
+    let (new_content, replacements) = match edit::apply_edits(&content, &edits) {
+        Ok(applied) => applied,
+        Err(message) => {
+            return Ok(fail(format!("{message} in {path}; no changes made")));
+        }
+    };
+    std::fs::write(path, &new_content).map_err(|e| CoreError::Provider(e.to_string()))?;
+    reads.record(path);
+
+    let diff = edit::unified_diff(path, &content, &new_content);
+    let diff = truncate(&diff, 10_000);
+    let noun = if replacements == 1 {
+        "replacement"
+    } else {
+        "replacements"
+    };
+    Ok(ToolResult::new(
+        true,
+        format!("edited {path}: {replacements} {noun}\n{diff}"),
+        format!("edited {path}: {replacements} {noun}"),
+    ))
 }
 
 /// The outcome of the write/edit approval flow.
@@ -605,6 +683,7 @@ async fn execute_write_with_approval(
     approver: &Arc<dyn Approver>,
     cancel: &CancellationToken,
     log: &mut Option<&mut SessionLog>,
+    reads: &mut ReadState,
 ) -> Result<ToolResult, CoreError> {
     let path = call
         .arguments
@@ -623,7 +702,10 @@ async fn execute_write_with_approval(
         record_grant(log, dir)?;
     }
     if decision.allowed {
-        execute_write(path, content).await
+        let result = execute_write(path, content).await?;
+        // The model knows what it wrote, so it may edit the file next.
+        reads.record(path);
+        Ok(result)
     } else {
         Ok(ToolResult::new(
             false,
@@ -640,20 +722,11 @@ async fn execute_edit_with_approval(
     approver: &Arc<dyn Approver>,
     cancel: &CancellationToken,
     log: &mut Option<&mut SessionLog>,
+    reads: &mut ReadState,
 ) -> Result<ToolResult, CoreError> {
     let path = call
         .arguments
         .get("path")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let old_string = call
-        .arguments
-        .get("old_string")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let new_string = call
-        .arguments
-        .get("new_string")
         .and_then(|v| v.as_str())
         .unwrap_or("");
     let decision = check_write_approval(&call.id, path, "edit", policy, approver, cancel).await?;
@@ -662,7 +735,7 @@ async fn execute_edit_with_approval(
         record_grant(log, dir)?;
     }
     if decision.allowed {
-        execute_edit(path, old_string, new_string).await
+        execute_edit(path, &call.arguments, reads).await
     } else {
         Ok(ToolResult::new(
             false,

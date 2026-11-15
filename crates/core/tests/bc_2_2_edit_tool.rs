@@ -65,6 +65,22 @@ fn done_edit(path: &str, old: &str, new: &str) -> LlmEvent {
     }
 }
 
+fn done_read(path: &str) -> LlmEvent {
+    LlmEvent::Done {
+        message: Message::Assistant {
+            content: None,
+            reasoning: None,
+            tool_calls: vec![barry_protocol::ToolCall {
+                id: "call_0".to_string(),
+                name: "read".to_string(),
+                arguments: json!({ "path": path }),
+            }],
+        },
+        stop: StopReason::ToolCalls,
+        usage: None,
+    }
+}
+
 fn done_text(text: &str) -> LlmEvent {
     LlmEvent::Done {
         message: Message::Assistant {
@@ -95,6 +111,8 @@ async fn bc_2_2_edit_unique_match_changes_file() {
     let path = file.to_str().unwrap().to_string();
 
     let provider = Arc::new(LocalProvider::new(vec![
+        // edit requires a prior read of the file
+        done_read(&path),
         done_edit(&path, "hello world", "hello universe"),
         done_text("done."),
     ]));
@@ -128,7 +146,7 @@ async fn bc_2_2_edit_unique_match_changes_file() {
         .iter()
         .filter(|e| matches!(e, Event::ToolFinished { ok: true, .. }))
         .collect();
-    assert_eq!(finished.len(), 1);
+    assert_eq!(finished.len(), 2, "read and edit both succeed");
 
     let contents = std::fs::read_to_string(&file).unwrap();
     assert_eq!(contents, "hello universe\nhello there\n");
@@ -144,6 +162,7 @@ async fn bc_2_2_edit_non_unique_no_change() {
     let path = file.to_str().unwrap().to_string();
 
     let provider = Arc::new(LocalProvider::new(vec![
+        done_read(&path),
         done_edit(&path, "repeat", "once"),
         done_text("tried."),
     ]));
