@@ -137,12 +137,14 @@ fn render_sse(reply: &Reply) -> String {
         Reply::Tool { name, arguments } => {
             let args_str = serde_json::to_string(arguments).unwrap();
             // Role chunk with tool_calls placeholder
-            let _ = write!(sse,
+            let _ = write!(
+                sse,
                 "data: {{\"choices\":[{{\"delta\":{{\"role\":\"assistant\",\"tool_calls\":[{{\"index\":0,\"id\":\"call_1\",\"function\":{{\"name\":\"{}\",\"arguments\":\"\"}}}}]}}}}]}}\n\n",
                 escape_json(name)
             );
             // Arguments chunk
-            let _ = write!(sse,
+            let _ = write!(
+                sse,
                 "data: {{\"choices\":[{{\"delta\":{{\"tool_calls\":[{{\"index\":0,\"function\":{{\"arguments\":\"{}\"}}}}]}}}}]}}\n\n",
                 escape_json(&args_str)
             );

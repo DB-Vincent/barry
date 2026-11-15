@@ -7,13 +7,14 @@
 //! Exit codes:
 //!   0: stdout may be empty or JSON `{decision, reason, updated_input, context}`.
 //!   2: block the tool; stderr is returned to the model / as a Notice.
-//!   other or timeout: warning Notice; blocks only if `fail_closed`.
+//!   other, timeout, spawn error or unparseable stdout: warning Notice; blocks
+//!   the tool instead when the hook sets `fail_closed`.
 
 use std::process::Stdio;
 use std::time::Duration;
 
-use crate::config::HookConfig;
 use crate::CoreError;
+use crate::config::HookConfig;
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
@@ -30,7 +31,8 @@ pub enum HookOutcome {
     UpdatedInput { input: String },
     /// The hook exited 2: block the tool.
     Block { reason: String },
-    /// The hook exited non-zero or timed out: warning only.
+    /// The hook failed (spawn error, other exit code, timeout, bad output):
+    /// a warning, or a block when the hook is `fail_closed`.
     Warning { reason: String },
 }
 
@@ -56,8 +58,10 @@ struct HookOutput {
     decision: Option<String>,
     #[serde(default)]
     reason: Option<String>,
+    /// Either an object with the new tool arguments, or a JSON string holding
+    /// them. Hooks written in shell find the object form far easier.
     #[serde(default)]
-    updated_input: Option<String>,
+    updated_input: Option<serde_json::Value>,
     #[serde(default)]
     context: Option<String>,
 }
@@ -70,6 +74,12 @@ pub(crate) struct Hook {
 
 impl Hook {
     pub(crate) fn new(config: HookConfig) -> Result<Self, CoreError> {
+        if config.command.is_empty() {
+            return Err(CoreError::Config(format!(
+                "hook for matcher {:?} has an empty command",
+                config.matcher
+            )));
+        }
         let regex = regex::Regex::new(&config.matcher).map_err(|e| {
             CoreError::Config(format!("invalid hook matcher {:?}: {e}", config.matcher))
         })?;
@@ -100,11 +110,18 @@ impl Hook {
         })
         .map_err(|e| CoreError::Config(format!("failed to serialize hook input: {e}")))?;
 
-        let mut cmd = tokio::process::Command::new(&self.config.command[0]);
-        cmd.args(&self.config.command[1..])
+        let Some((program, args)) = self.config.command.split_first() else {
+            // `Hook::new` rejects an empty command, but stay panic-free here too.
+            return Ok(self.failure("hook command is empty".to_string()));
+        };
+        let mut cmd = tokio::process::Command::new(program);
+        cmd.args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stderr(Stdio::piped())
+            // A timed-out hook must not linger: dropping the child (when the
+            // `wait_with_output` future is cancelled) kills it.
+            .kill_on_drop(true);
 
         // User's environment minus secret variables.
         let env_cleaned: Vec<(std::ffi::OsString, std::ffi::OsString)> = std::env::vars_os()
@@ -113,11 +130,11 @@ impl Hook {
         cmd.env_clear();
         cmd.envs(env_cleaned);
 
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| CoreError::Config(format!("failed to spawn hook: {e}")))?;
-        {
-            let mut stdin = child.stdin.take().expect("stdin open");
+        let mut child = match cmd.spawn() {
+            Ok(child) => child,
+            Err(e) => return Ok(self.failure(format!("failed to spawn hook: {e}"))),
+        };
+        if let Some(mut stdin) = child.stdin.take() {
             use tokio::io::AsyncWriteExt;
             let _ = stdin.write_all(input_json.as_bytes()).await;
             let _ = stdin.shutdown().await;
@@ -126,27 +143,33 @@ impl Hook {
         let timeout = Duration::from_secs(self.config.timeout_secs);
         let outcome = tokio::select! {
             biased;
-            _ = cancel.cancelled() => HookOutcome::Warning {
-                reason: "hook cancelled".to_string(),
-            },
+            _ = cancel.cancelled() => self.failure("hook cancelled".to_string()),
             result = tokio::time::timeout(timeout, child.wait_with_output()) => {
                 match result {
                     Ok(output) => match output {
                         Ok(output) => self.interpret_output(&output),
-                        Err(e) => HookOutcome::Warning {
-                            reason: format!("hook error: {e}"),
-                        },
+                        Err(e) => self.failure(format!("hook error: {e}")),
                     },
-                    Err(_elapsed) => HookOutcome::Warning {
-                        reason: format!(
-                            "hook timed out after {}s",
-                            self.config.timeout_secs
-                        ),
-                    },
+                    Err(_elapsed) => self.failure(format!(
+                        "hook timed out after {}s",
+                        self.config.timeout_secs
+                    )),
                 }
             }
         };
         Ok(outcome)
+    }
+
+    /// A failed hook is a warning by default, but `fail_closed` turns every
+    /// failure into a block: the tool does not run on a hook we could not trust.
+    fn failure(&self, reason: String) -> HookOutcome {
+        if self.config.fail_closed {
+            HookOutcome::Block {
+                reason: format!("{reason}; hook is fail_closed"),
+            }
+        } else {
+            HookOutcome::Warning { reason }
+        }
     }
 
     fn interpret_output(&self, output: &std::process::Output) -> HookOutcome {
@@ -156,8 +179,12 @@ impl Hook {
 
         match code {
             Some(0) => {
-                if let Ok(decoded) = serde_json::from_str::<HookOutput>(&stdout) {
-                    match decoded.decision.as_deref() {
+                // Empty stdout is a hook with no opinion, not a failure.
+                if stdout.trim().is_empty() {
+                    return HookOutcome::Allow;
+                }
+                match serde_json::from_str::<HookOutput>(&stdout) {
+                    Ok(decoded) => match decoded.decision.as_deref() {
                         Some("deny") => HookOutcome::Deny {
                             reason: decoded.reason.unwrap_or_default(),
                         },
@@ -166,26 +193,29 @@ impl Hook {
                         },
                         Some("allow") => HookOutcome::Allow,
                         Some("updated_input") | None => {
-                            if let Some(input) = decoded.updated_input {
-                                HookOutcome::UpdatedInput { input }
-                            } else {
-                                HookOutcome::Allow
+                            match decoded.updated_input {
+                                // A string value is already JSON text.
+                                Some(serde_json::Value::String(text)) => {
+                                    HookOutcome::UpdatedInput { input: text }
+                                }
+                                Some(value) => HookOutcome::UpdatedInput {
+                                    input: value.to_string(),
+                                },
+                                None => HookOutcome::Allow,
                             }
                         }
-                        other => HookOutcome::Warning {
-                            reason: format!("unknown hook decision {other:?}"),
-                        },
-                    }
-                } else {
-                    HookOutcome::Allow
+                        other => self.failure(format!("unknown hook decision {other:?}")),
+                    },
+                    Err(e) => self.failure(format!("hook returned invalid JSON: {e}")),
                 }
             }
             Some(2) => HookOutcome::Block {
                 reason: stderr.trim().to_string(),
             },
-            _ => HookOutcome::Warning {
-                reason: format!("hook exited {code:?}: {stderr}"),
-            },
+            other => self.failure(match other {
+                Some(code) => format!("hook exited {code}: {stderr}"),
+                None => format!("hook was terminated by a signal: {stderr}"),
+            }),
         }
     }
 }

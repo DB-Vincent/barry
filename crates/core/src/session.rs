@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use barry_policy::Policy;
 use barry_protocol::{DecidedBy, Decision, Message};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
@@ -352,7 +352,7 @@ pub fn resolve_session(spec: &str) -> Result<PathBuf, SessionError> {
 }
 
 /// A stable fingerprint of the effective policy, for `session_start`.
-pub(crate) fn policy_fingerprint(policy: Option<&Policy>) -> String {
+pub(crate) fn policy_fingerprint(policy: &Policy) -> String {
     /// Hash one field with its length, so concatenated values cannot collide.
     fn field(hasher: &mut Sha256, bytes: &[u8]) {
         hasher.update((bytes.len() as u64).to_le_bytes());
@@ -361,30 +361,25 @@ pub(crate) fn policy_fingerprint(policy: Option<&Policy>) -> String {
 
     let mut hasher = Sha256::new();
     field(&mut hasher, b"barry-policy-v1");
-    match policy {
-        None => field(&mut hasher, b"no-policy"),
-        Some(policy) => {
-            field(&mut hasher, policy.cwd().display().to_string().as_bytes());
-            for path in policy.writable_roots() {
-                field(&mut hasher, path.display().to_string().as_bytes());
-            }
-            for path in policy.grants() {
-                field(&mut hasher, path.display().to_string().as_bytes());
-            }
-            for path in policy.read_deny_paths() {
-                field(&mut hasher, path.display().to_string().as_bytes());
-            }
-            for component in policy.protected() {
-                field(&mut hasher, component.as_bytes());
-            }
-            for rule in policy.rules() {
-                field(&mut hasher, rule.id.as_bytes());
-                field(&mut hasher, rule.r#match.as_bytes());
-                field(&mut hasher, format!("{:?}", rule.decision).as_bytes());
-            }
-            field(&mut hasher, &[u8::from(policy.network())]);
-        }
+    field(&mut hasher, policy.cwd().display().to_string().as_bytes());
+    for path in policy.writable_roots() {
+        field(&mut hasher, path.display().to_string().as_bytes());
     }
+    for path in policy.grants() {
+        field(&mut hasher, path.display().to_string().as_bytes());
+    }
+    for path in policy.read_deny_paths() {
+        field(&mut hasher, path.display().to_string().as_bytes());
+    }
+    for component in policy.protected() {
+        field(&mut hasher, component.as_bytes());
+    }
+    for rule in policy.rules() {
+        field(&mut hasher, rule.id.as_bytes());
+        field(&mut hasher, rule.r#match.as_bytes());
+        field(&mut hasher, format!("{:?}", rule.decision).as_bytes());
+    }
+    field(&mut hasher, &[u8::from(policy.network())]);
     hex_digest(hasher.finalize())
 }
 

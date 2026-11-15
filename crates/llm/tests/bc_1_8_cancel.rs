@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-1.8 Cancelling mid-stream yields Aborted within 200 ms, with the
 /// partial text kept.
 use barry_llm::{Compat, LlmEvent, LlmRequest, OpenAiProvider, Provider};

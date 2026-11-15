@@ -12,8 +12,6 @@
 //! If `bwrap` is missing on Linux, commands fail closed: they never run
 //! unsandboxed.
 
-#![forbid(unsafe_code)]
-
 use std::path::PathBuf;
 use thiserror::Error;
 

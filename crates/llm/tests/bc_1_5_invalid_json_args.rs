@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-1.5 Invalid JSON tool arguments give a ToolCall whose arguments is the
 /// raw string. This is not a provider error.
 use barry_llm::{Compat, LlmEvent, LlmRequest, OpenAiProvider, Provider};

@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-5.2 `barry log verify` on an untouched log prints `ok` and exits 0.
 /// After one byte of any line is edited, it reports that line and exits 1.
 use barry_core::session::{EntryKind, SessionLog};
