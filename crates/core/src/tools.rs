@@ -8,10 +8,11 @@ use barry_policy::Policy;
 use barry_protocol::{ApprovalChoice, ApprovalRequest, DecidedBy, Decision, ToolCall, ToolSpec};
 use barry_sandbox::{self as sandbox, SandboxSpec};
 use serde_json::json;
+use tokio::io::AsyncReadExt;
 use tokio_util::sync::CancellationToken;
 
+use crate::bounded::{read_numbered, ReadError, StreamCapture, STREAM_LIMIT};
 use crate::config::Config;
-use crate::context::truncate;
 use crate::hooks::{Hook, HookOutcome};
 use crate::session::{decided_by_label, decision_label, EntryKind, SessionLog};
 use crate::{Approver, CoreError};
@@ -459,18 +460,20 @@ pub(crate) async fn execute_tool(
     }
 }
 
+/// Read a file with line numbers, buffering a bounded head and tail instead of
+/// the whole file (#19). The result already carries the PLAN 6.4 marker when
+/// the file did not fit.
 async fn execute_read(path: &str) -> Result<ToolResult, CoreError> {
-    let content = std::fs::read_to_string(path).map_err(|e| CoreError::Provider(e.to_string()))?;
-    let numbered: String = content
-        .lines()
-        .enumerate()
-        .map(|(i, line)| format!("{}: {}", i + 1, line))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let numbered = truncate(&numbered, 30_000).into_owned();
-
-    Ok(ToolResult::new(true, numbered.clone(), numbered))
+    match read_numbered(Path::new(path)) {
+        Ok(numbered) => Ok(ToolResult::new(true, numbered.clone(), numbered)),
+        // A file too large to read is a failed call the model can act on, not
+        // an internal error: say what to do instead.
+        Err(err @ ReadError::TooLarge { .. }) => {
+            let message = format!("not read: {err}");
+            Ok(ToolResult::new(false, message.clone(), message))
+        }
+        Err(ReadError::Io(err)) => Err(CoreError::Provider(err.to_string())),
+    }
 }
 
 /// Resolve the path a write or edit will really touch.
@@ -873,7 +876,36 @@ async fn execute_bash_sandboxed(
     run_bash_command(cmd, timeout_secs, cancel).await
 }
 
+/// Read one pipe into `capture`, killing the process group once the stream
+/// has produced more than the capture limit (#19).
+///
+/// Nothing past the limit would ever reach the model, so draining the rest can
+/// only cost time and memory.
+async fn drain_bounded<R>(
+    reader: &mut R,
+    capture: &mut StreamCapture,
+    pid: u32,
+) -> std::io::Result<()>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut chunk = [0u8; 8 * 1024];
+    loop {
+        let read = reader.read(&mut chunk).await?;
+        if read == 0 {
+            return Ok(());
+        }
+        if !capture.push(&chunk[..read]) {
+            kill_process_group(pid);
+            return Ok(());
+        }
+    }
+}
+
 /// Common execution logic: spawn, race cancel vs timeout vs completion.
+///
+/// Both pipes are drained as the command writes, so memory stays bounded no
+/// matter how much it prints (#19).
 async fn run_bash_command(
     cmd: tokio::process::Command,
     timeout_secs: u64,
@@ -884,13 +916,36 @@ async fn run_bash_command(
         .stderr(std::process::Stdio::piped())
         .process_group(0);
 
-    let child = cmd
+    let mut child = cmd
         .spawn()
         .map_err(|e| CoreError::Provider(format!("failed to run command: {e}")))?;
 
     let child_id = child.id().unwrap_or(0);
 
-    let wait = async move { child.wait_with_output().await };
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| CoreError::Provider("no stdout pipe".to_string()))?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| CoreError::Provider("no stderr pipe".to_string()))?;
+
+    let mut out_capture = StreamCapture::new(STREAM_LIMIT);
+    let mut err_capture = StreamCapture::new(STREAM_LIMIT);
+
+    // Both pipes must be read concurrently: a command that fills the pipe it
+    // is not being read from would block until the timeout.
+    let wait = async move {
+        let (out_result, err_result) = tokio::join!(
+            drain_bounded(&mut stdout, &mut out_capture, child_id),
+            drain_bounded(&mut stderr, &mut err_capture, child_id),
+        );
+        let status = child.wait().await?;
+        out_result?;
+        err_result?;
+        Ok::<_, std::io::Error>((status, out_capture, err_capture))
+    };
 
     tokio::select! {
         biased;
@@ -900,15 +955,26 @@ async fn run_bash_command(
         }
         result = tokio::time::timeout(Duration::from_secs(timeout_secs), wait) => {
             match result {
-                Ok(Ok(output)) => {
-                    let exit_code = output.status.code().unwrap_or(-1);
-                    let stdout_raw = String::from_utf8_lossy(&output.stdout);
-                    let stderr_raw = String::from_utf8_lossy(&output.stderr);
-                    let stdout = truncate(&stdout_raw, 30_000);
-                    let stderr = truncate(&stderr_raw, 30_000);
+                Ok(Ok((status, out_capture, err_capture))) => {
+                    let exit_code = status.code().unwrap_or(-1);
+                    let out_limited = out_capture.limited();
+                    let err_limited = err_capture.limited();
+                    let mut stdout_text = out_capture.into_text();
+                    let mut stderr_text = err_capture.into_text();
+                    if out_limited || err_limited {
+                        let note = format!(
+                            "\n[... output over {STREAM_LIMIT} bytes; command killed ...]"
+                        );
+                        if out_limited {
+                            stdout_text.push_str(&note);
+                        }
+                        if err_limited {
+                            stderr_text.push_str(&note);
+                        }
+                    }
 
                     let content =
-                        format!("exit_code: {exit_code}\nstdout: {stdout}\nstderr: {stderr}");
+                        format!("exit_code: {exit_code}\nstdout: {stdout_text}\nstderr: {stderr_text}");
                     Ok(ToolResult::new(
                         exit_code == 0,
                         content,
