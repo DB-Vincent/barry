@@ -167,7 +167,9 @@ pub(crate) async fn run(
         }
     };
 
-    let policy = Policy::new(barry_policy::PolicyConfig {
+    // A policy that cannot be built is a config error: report it and exit 2
+    // rather than panicking on the way into the REPL (#44).
+    let policy = match Policy::new(barry_policy::PolicyConfig {
         cwd: std::env::current_dir().unwrap_or_default(),
         home: std::env::var("HOME").map(PathBuf::from).unwrap_or_default(),
         extra_writable: vec![],
@@ -175,8 +177,13 @@ pub(crate) async fn run(
         protected: cfg.fs_protected.clone(),
         rules: cfg.rules.clone(),
         network: cfg.sandbox_network,
-    })
-    .expect("policy constructs");
+    }) {
+        Ok(policy) => policy,
+        Err(err) => {
+            eprintln!("error: {err}");
+            return ExitCode::from(2);
+        }
+    };
 
     let input = Arc::new(tokio::sync::Mutex::new(BufReader::new(tokio::io::stdin())));
     let approver = Arc::new(ReplApprover::new(input.clone()));
