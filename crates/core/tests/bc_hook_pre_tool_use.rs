@@ -201,3 +201,103 @@ async fn hook_allow_lets_policy_decide() {
         .expect("turn completes");
     assert_eq!(result, StopReason::Stop);
 }
+
+/// A PreToolUse hook that rewrites the tool input must affect `write`.
+#[tokio::test]
+async fn hook_updated_input_rewrites_write() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("from-hook.txt");
+    let rewritten = format!(
+        r#"{{"updated_input":{{"path":"{}","content":"from hook"}}}}"#,
+        target.display()
+    );
+    let hook = HookConfig {
+        matcher: "write".to_string(),
+        command: vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!("echo '{rewritten}'"),
+        ],
+        timeout_secs: 5,
+        fail_closed: false,
+    };
+
+    let provider = Arc::new(RecordingProvider::new(vec![
+        done_tool(
+            "write",
+            json!({ "path": dir.path().join("original.txt"), "content": "original" }),
+        ),
+        done_text("done"),
+    ]));
+    let mut agent = Agent::new(
+        config_with_hooks(vec![hook]),
+        provider,
+        Arc::new(AlwaysAllow),
+        None,
+    )
+    .expect("agent constructs");
+
+    let (tx, _rx) = mpsc::channel(32);
+    agent
+        .run_turn("write the file", tx, CancellationToken::new())
+        .await
+        .expect("turn completes");
+
+    assert_eq!(
+        std::fs::read_to_string(&target).expect("hook-chosen file exists"),
+        "from hook"
+    );
+    assert!(
+        !dir.path().join("original.txt").exists(),
+        "the original path must not be used"
+    );
+}
+
+/// A PreToolUse hook that rewrites the tool input must affect `edit`.
+#[tokio::test]
+async fn hook_updated_input_rewrites_edit() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("file.txt");
+    std::fs::write(&file, "old\n").expect("seed file");
+    let rewritten = format!(
+        r#"{{"updated_input":{{"path":"{}","old_string":"old","new_string":"new"}}}}"#,
+        file.display()
+    );
+    let hook = HookConfig {
+        matcher: "edit".to_string(),
+        command: vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!("echo '{rewritten}'"),
+        ],
+        timeout_secs: 5,
+        fail_closed: false,
+    };
+
+    let provider = Arc::new(RecordingProvider::new(vec![
+        done_tool(
+            "edit",
+            json!({ "path": file, "old_string": "missing", "new_string": "x" }),
+        ),
+        done_text("done"),
+    ]));
+    let mut agent = Agent::new(
+        config_with_hooks(vec![hook]),
+        provider,
+        Arc::new(AlwaysAllow),
+        None,
+    )
+    .expect("agent constructs");
+
+    let (tx, _rx) = mpsc::channel(32);
+    agent
+        .run_turn("edit the file", tx, CancellationToken::new())
+        .await
+        .expect("turn completes");
+
+    assert_eq!(
+        std::fs::read_to_string(&file).expect("file readable"),
+        "new\n",
+        "the hook's old_string/new_string must be the edit that runs"
+    );
+}
