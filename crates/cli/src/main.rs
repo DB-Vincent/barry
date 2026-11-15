@@ -12,6 +12,7 @@ use futures::stream::StreamExt;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
+use barry_core::approval_file::PolicyFileApprover;
 use barry_core::config::Config;
 use barry_core::session::{self, SessionLog};
 use barry_core::{Agent, Approver, BoxFuture};
@@ -66,6 +67,10 @@ struct Cli {
     /// Resume a session from a log file or a UUID/timestamp prefix
     #[arg(long = "resume")]
     resume: Option<String>,
+    /// Approve only the actions listed in this TOML file (headless only);
+    /// every other action that needs approval is denied
+    #[arg(long = "approval-file", requires = "prompt")]
+    approval_file: Option<PathBuf>,
     /// Stop a run after this many input plus output tokens
     #[arg(long = "max-tokens")]
     max_tokens: Option<u64>,
@@ -173,7 +178,15 @@ async fn main() -> ExitCode {
         return repl::run(cfg, cli.model, cli.resume).await;
     };
 
-    run_headless(cfg, prompt, cli.json, cli.model, cli.resume).await
+    run_headless(
+        cfg,
+        prompt,
+        cli.json,
+        cli.model,
+        cli.resume,
+        cli.approval_file,
+    )
+    .await
 }
 
 fn run_command(command: Commands, cfg: &Config) -> ExitCode {
@@ -342,7 +355,23 @@ async fn run_headless(
     json: bool,
     model: Option<String>,
     resume: Option<String>,
+    approval_file: Option<PathBuf>,
 ) -> ExitCode {
+    // Without an approval file every request is denied. With one, only the
+    // listed actions are approved and the rest are still denied.
+    let approver: Arc<dyn Approver> = match approval_file {
+        None => Arc::new(HeadlessApprover),
+        Some(path) => {
+            let cwd = std::env::current_dir().unwrap_or_default();
+            match PolicyFileApprover::from_file(&path, &cwd, cfg.fs_protected.clone()) {
+                Ok(approver) => Arc::new(approver),
+                Err(err) => {
+                    eprintln!("{err}");
+                    return ExitCode::from(2);
+                }
+            }
+        }
+    };
     let model = model.unwrap_or_else(|| cfg.default_model.clone());
     // The audit log records the model actually used, including --model.
     cfg.default_model = model.clone();
@@ -388,7 +417,7 @@ async fn run_headless(
                     return ExitCode::from(2);
                 }
             };
-            match Agent::resume(cfg, provider, Arc::new(HeadlessApprover), policy, &path) {
+            match Agent::resume(cfg, provider, approver, policy, &path) {
                 Ok(agent) => agent,
                 Err(err) => {
                     eprintln!("{err}");
@@ -397,7 +426,7 @@ async fn run_headless(
             }
         }
         None => {
-            let mut agent = match Agent::new(cfg, provider, Arc::new(HeadlessApprover), policy) {
+            let mut agent = match Agent::new(cfg, provider, approver, policy) {
                 Ok(agent) => agent,
                 Err(err) => {
                     eprintln!("{err}");

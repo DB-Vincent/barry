@@ -206,6 +206,15 @@ pub(crate) fn record_decision(
         .map_err(|err| CoreError::Session(err.to_string()))
 }
 
+/// What the model is told when an approval is refused. A user refusal keeps
+/// its familiar wording; anything else was refused by an approval policy.
+pub(crate) fn denial_message(source: &DecidedBy) -> &'static str {
+    match source {
+        DecidedBy::User => "denied by user",
+        _ => "denied: not covered by the approval policy",
+    }
+}
+
 /// Record a directory grant as soon as the user approves it.
 pub(crate) fn record_grant(log: &mut Option<&mut SessionLog>, dir: &Path) -> Result<(), CoreError> {
     let Some(session) = log.as_mut() else {
@@ -371,6 +380,8 @@ async fn run_pre_tool_use_hooks(
                     summary: format!("{name} (asked by hook)"),
                     reason: reason.clone(),
                     grant_path: None,
+                    command: None,
+                    path: None,
                 };
                 if ctx.approver.decide(&req).await == ApprovalChoice::Deny {
                     ctx.record_decision(
@@ -443,30 +454,34 @@ pub(crate) async fn check_write_approval(
                 summary: format!("{tool} to {path}"),
                 reason,
                 grant_path: grant_dir,
+                command: None,
+                path: Some(PathBuf::from(path)),
             };
-            let choice = approver.decide(&req).await;
+            let (choice, source) = approver.decide_attributed(&req).await;
             match choice {
                 ApprovalChoice::Deny => Ok(WriteDecision {
                     allowed: false,
                     decision: Decision::Deny {
-                        reason: "denied by user".to_string(),
+                        reason: denial_message(&source).to_string(),
                     },
-                    decided_by: DecidedBy::User,
+                    decided_by: source,
                     grant: None,
                 }),
                 ApprovalChoice::Once => Ok(WriteDecision {
                     allowed: true,
                     decision: Decision::Allow,
-                    decided_by: DecidedBy::User,
+                    decided_by: source,
                     grant: None,
                 }),
                 ApprovalChoice::AlwaysThisSession => {
+                    // Only a user approval widens the session to the directory.
                     let granted = grant_path
+                        .filter(|_| source == DecidedBy::User)
                         .and_then(|dir| grants.grant_dir(policy, &dir).ok().map(|()| dir));
                     Ok(WriteDecision {
                         allowed: true,
                         decision: Decision::Allow,
-                        decided_by: DecidedBy::User,
+                        decided_by: source,
                         grant: granted,
                     })
                 }

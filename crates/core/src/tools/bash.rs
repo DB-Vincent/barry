@@ -10,7 +10,9 @@ use serde_json::json;
 use tokio::io::AsyncReadExt;
 use tokio_util::sync::CancellationToken;
 
-use super::{Tool, ToolCtx, ToolResult, record_decision, record_grant, record_prefix};
+use super::{
+    Tool, ToolCtx, ToolResult, denial_message, record_decision, record_grant, record_prefix,
+};
 use crate::CoreError;
 use crate::bounded::{STREAM_LIMIT, StreamCapture};
 use crate::session::SessionLog;
@@ -107,28 +109,32 @@ async fn run(ctx: ToolCtx<'_>) -> Result<ToolResult, CoreError> {
                 summary: format!("bash: {command}"),
                 reason: reason.clone(),
                 grant_path: None,
+                command: Some(command.to_string()),
+                path: None,
             };
-            match run_ctx.approver.decide(&req).await {
+            let (choice, source) = run_ctx.approver.decide_attributed(&req).await;
+            match choice {
                 ApprovalChoice::Deny => {
+                    let message = denial_message(&source);
                     record_decision(
                         &mut log,
                         call,
                         &Decision::Deny {
-                            reason: "denied by user".to_string(),
+                            reason: message.to_string(),
                         },
-                        &DecidedBy::User,
+                        &source,
                     )?;
                     Ok(ToolResult::new(
                         false,
-                        "denied by user".to_string(),
-                        "denied by user".to_string(),
+                        message.to_string(),
+                        message.to_string(),
                     ))
                 }
                 // "Once" runs this one command and records nothing:
                 // approving on demand must not silently approve every
                 // later command that starts with the same word.
                 ApprovalChoice::Once => {
-                    record_decision(&mut log, call, &Decision::Allow, &DecidedBy::User)?;
+                    record_decision(&mut log, call, &Decision::Allow, &source)?;
                     run_bash(
                         &mut run_ctx,
                         command,
@@ -139,12 +145,15 @@ async fn run(ctx: ToolCtx<'_>) -> Result<ToolResult, CoreError> {
                     .await
                 }
                 ApprovalChoice::AlwaysThisSession => {
-                    let prefix = session_prefix(command);
+                    // A user approval grants the first two argv tokens as a
+                    // session prefix. A rule approval covers this command
+                    // only, so it never widens what later commands may do.
+                    let prefix = session_prefix(command).filter(|_| source == DecidedBy::User);
                     if let Some(prefix) = &prefix {
                         run_ctx.grants.approve_prefix(prefix.clone());
                         record_prefix(&mut log, &prefix.join(" "))?;
                     }
-                    record_decision(&mut log, call, &Decision::Allow, &DecidedBy::User)?;
+                    record_decision(&mut log, call, &Decision::Allow, &source)?;
                     run_bash(
                         &mut run_ctx,
                         command,
@@ -503,6 +512,8 @@ async fn run_bash(
         summary: format!("bash: {command}"),
         reason: "sandbox blocked the command".to_string(),
         grant_path: Some(target_dir.clone()),
+        command: Some(command.to_string()),
+        path: None,
     };
 
     match ctx.approver.decide(&req).await {

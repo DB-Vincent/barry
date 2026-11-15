@@ -122,6 +122,11 @@ pub struct ApprovalRequest {
     pub summary: String,
     pub reason: String,
     pub grant_path: Option<PathBuf>,
+    /// The bash command, for a `bash` request. Lets a non-interactive approver
+    /// match on the command itself instead of parsing `summary`.
+    pub command: Option<String>,
+    /// The path as the model gave it, for a `write` or `edit` request.
+    pub path: Option<PathBuf>,
 }
 
 /// Events emitted by the core agent loop to the front end.
