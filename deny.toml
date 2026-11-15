@@ -11,6 +11,9 @@ ignore = []
 
 [licenses]
 version = 2
+# Workspace members are unpublished binaries and carry no license field of
+# their own; what they ship is covered by the repository LICENSE.
+private = { ignore = true }
 # The allowlist may name licences the tree does not currently use without
 # failing the run, so it can stay ahead of a dependency bump.
 unused-allowed-license = "allow"
@@ -27,6 +30,7 @@ allow = [
     "Zlib",
     "BSL-1.0",
     "MPL-2.0",
+    "CDLA-Permissive-2.0",
     "CC0-1.0",
     "Unlicense",
     "0BSD",
