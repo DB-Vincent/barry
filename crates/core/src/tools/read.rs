@@ -6,7 +6,7 @@ use serde_json::json;
 use std::path::Path;
 
 use super::{Tool, ToolCtx, ToolResult};
-use crate::context::truncate;
+use crate::bounded::{read_numbered, ReadError};
 use crate::CoreError;
 
 pub(super) struct ReadTool;
@@ -34,10 +34,7 @@ impl Tool for ReadTool {
 /// Run a read through the policy check before reading the file.
 async fn run(mut ctx: ToolCtx<'_>) -> Result<ToolResult, CoreError> {
     let path = ctx.str_arg("path");
-    let decision = match ctx.policy.as_ref() {
-        Some(policy) => policy.check_read(Path::new(&path)),
-        None => Decision::Allow,
-    };
+    let decision = ctx.policy.check_read(Path::new(&path));
     match decision {
         Decision::Allow => {
             ctx.record_decision(&Decision::Allow, &DecidedBy::Default)?;
@@ -70,19 +67,28 @@ async fn run(mut ctx: ToolCtx<'_>) -> Result<ToolResult, CoreError> {
         }
     }
 
-    read_file(&path)
+    read_file(&path).await
 }
 
-fn read_file(path: &str) -> Result<ToolResult, CoreError> {
-    let content = std::fs::read_to_string(path).map_err(|e| CoreError::Provider(e.to_string()))?;
-    let numbered: String = content
-        .lines()
-        .enumerate()
-        .map(|(i, line)| format!("{}: {}", i + 1, line))
-        .collect::<Vec<_>>()
-        .join("\n");
+/// Read a file with line numbers, buffering a bounded head and tail instead of
+/// the whole file (#19). The result already carries the PLAN 6.4 marker when
+/// the file did not fit.
+async fn read_file(path: &str) -> Result<ToolResult, CoreError> {
+    // The stat, the windowed read and the newline count are filesystem work on
+    // a synchronous helper: keep them off the runtime thread (#25).
+    let path = Path::new(path).to_path_buf();
+    let read = tokio::task::spawn_blocking(move || read_numbered(&path))
+        .await
+        .map_err(|err| CoreError::Provider(format!("read task failed: {err}")))?;
 
-    let numbered = truncate(&numbered, 30_000).into_owned();
-
-    Ok(ToolResult::new(true, numbered.clone(), numbered))
+    match read {
+        Ok(numbered) => Ok(ToolResult::new(true, numbered.clone(), numbered)),
+        // A file too large to read is a failed call the model can act on, not
+        // an internal error: say what to do instead.
+        Err(err @ ReadError::TooLarge { .. }) => {
+            let message = format!("not read: {err}");
+            Ok(ToolResult::new(false, message.clone(), message))
+        }
+        Err(ReadError::Io(err)) => Err(CoreError::Io(err)),
+    }
 }

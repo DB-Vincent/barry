@@ -4,6 +4,7 @@
 /// against the built binary; unit tests here cover the unsandboxed path and
 /// the policy decision layer.
 use barry_core::config::Config;
+use barry_core::session::SessionLog;
 use barry_core::{Agent, Approver, BoxFuture};
 use barry_llm::{LlmEvent, LlmRequest};
 use barry_policy::{Decision, Policy, PolicyConfig};
@@ -94,31 +95,15 @@ async fn collect_events(mut rx: mpsc::Receiver<Event>) -> Vec<Event> {
 
 /// Runs one bash tool call and returns the stop reason, the events and every
 /// request the provider was handed.
-async fn run_once(
-    command: &str,
-    policy: Option<Policy>,
-) -> (StopReason, Vec<Event>, Vec<LlmRequest>) {
+async fn run_once(command: &str, policy: Policy) -> (StopReason, Vec<Event>, Vec<LlmRequest>) {
     let provider = Arc::new(RecordingProvider::new(vec![
         done_bash(command),
         LlmEvent::TextDelta("ok".to_string()),
         done_text("ok"),
     ]));
     let approver = Arc::new(LocalApprover);
-    let mut agent = Agent::new(
-        Config {
-            default_model: "test".to_string(),
-            max_turns: 10,
-            context_window: 32_768,
-            sandbox_network: true,
-            fs_read_deny: vec![],
-            fs_protected: vec![],
-            hooks: vec![],
-        },
-        provider.clone(),
-        approver,
-        policy,
-    )
-    .expect("agent constructs");
+    let mut agent =
+        Agent::new(config(true), provider.clone(), approver, policy).expect("agent constructs");
 
     let (tx, rx) = mpsc::channel(32);
     let stop = agent
@@ -142,9 +127,9 @@ fn tool_content(requests: &[LlmRequest]) -> Option<String> {
 }
 
 #[tokio::test]
-async fn bc_4_bash_runs_unsandboxed_without_policy() {
-    // With no policy, bash runs unsandboxed (backstop for headless/cli).
-    let (stop, events, _requests) = run_once("echo hello", None).await;
+async fn bc_4_bash_runs_unsandboxed_when_configured() {
+    // #30: running without the sandbox is a config flag, not a missing policy.
+    let (stop, events, _requests) = run_once("echo hello", permissive_policy()).await;
 
     assert_eq!(stop, StopReason::Stop);
 
@@ -174,7 +159,7 @@ async fn bc_4_bash_policy_deny_blocks_command() {
     })
     .expect("policy constructs");
 
-    let (stop, events, requests) = run_once("echo hello", Some(policy)).await;
+    let (stop, events, requests) = run_once("echo hello", policy).await;
 
     assert_eq!(stop, StopReason::Stop);
 
@@ -196,4 +181,63 @@ async fn bc_4_bash_policy_deny_blocks_command() {
         !content.contains("hello"),
         "the command must not have run: {content}"
     );
+}
+
+/// A policy with no rules and no read-deny, for tests that cover the turn loop
+/// and the tool plumbing rather than the policy engine (#30). It pre-approves
+/// nothing: a write outside its own cwd goes to the test approver.
+fn permissive_policy() -> barry_policy::Policy {
+    barry_policy::Policy::new(barry_policy::PolicyConfig {
+        cwd: std::env::temp_dir().join("barry-test-policy-cwd"),
+        home: std::env::temp_dir().join("barry-test-policy-home"),
+        extra_writable: vec![],
+        read_deny: vec![],
+        protected: vec![],
+        rules: vec![],
+        network: true,
+    })
+    .expect("policy constructs")
+}
+
+fn config(unsandboxed: bool) -> Config {
+    Config {
+        default_model: "test".to_string(),
+        max_turns: 10,
+        context_window: 32_768,
+        sandbox_network: true,
+        sandbox_unsandboxed: unsandboxed,
+        redact_tool_output: false,
+        fs_read_deny: vec![],
+        fs_protected: vec![],
+        rules: vec![],
+        hooks: vec![],
+    }
+}
+
+/// #30: running without the OS sandbox is a decision, so the audit trail names
+/// it; with the flag off, nothing claims the sandbox was disabled.
+#[tokio::test]
+async fn bc_4_unsandboxed_mode_is_logged() {
+    for (unsandboxed, expected) in [(true, true), (false, false)] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let log = SessionLog::create_in(dir.path(), "main").expect("session log");
+        let log_path = log.path().to_path_buf();
+        let provider = Arc::new(RecordingProvider::new(vec![done_text("ok")]));
+        let _agent = Agent::new(
+            config(unsandboxed),
+            provider,
+            Arc::new(LocalApprover),
+            permissive_policy(),
+        )
+        .expect("agent constructs")
+        .with_session_log(log);
+
+        let content = std::fs::read_to_string(&log_path).expect("read session log");
+        assert!(content.contains("\"session_start\""));
+        assert_eq!(
+            content.contains("sandbox disabled by config"),
+            expected,
+            "unsandboxed={unsandboxed}: {content}"
+        );
+    }
 }

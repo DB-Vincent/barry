@@ -19,7 +19,6 @@ use barry_protocol::{ApprovalChoice, ApprovalRequest, DecidedBy, Decision, ToolC
 use futures::future::BoxFuture;
 use tokio_util::sync::CancellationToken;
 
-use crate::config::Config;
 use crate::hooks::{Hook, HookOutcome};
 use crate::session::{decided_by_label, decision_label, EntryKind, SessionLog};
 use crate::{Approver, CoreError};
@@ -68,12 +67,32 @@ impl ToolResult {
     }
 }
 
+/// What a tool call needs from the agent (#30).
+///
+/// The policy is not optional. It used to be, and `None` meant unsandboxed
+/// bash with unrestricted reads and writes: the loop then had a mode where
+/// every restriction disappeared because a value was missing rather than
+/// because someone chose it. Running without the OS sandbox is now an explicit
+/// config flag (`sandbox.unsandboxed`) that the session log records.
+pub(crate) struct ToolContext<'a> {
+    pub policy: &'a mut Policy,
+    /// `sandbox.unsandboxed = true`: run bash without the OS sandbox.
+    pub unsandboxed: bool,
+    pub approver: &'a Arc<dyn Approver>,
+    pub cancel: &'a CancellationToken,
+    /// The agent's working directory, not the process's (#28).
+    pub cwd: &'a Path,
+    pub hooks: &'a [Hook],
+}
+
 /// Everything a tool needs to run one call.
 pub(crate) struct ToolCtx<'a> {
     pub(crate) call: &'a ToolCall,
     /// The call arguments after PreToolUse hooks ran (a hook may rewrite them).
     pub(crate) arguments: serde_json::Value,
-    pub(crate) policy: &'a mut Option<Policy>,
+    pub(crate) policy: &'a mut Policy,
+    /// `sandbox.unsandboxed = true`: run bash without the OS sandbox.
+    pub(crate) unsandboxed: bool,
     pub(crate) approver: &'a Arc<dyn Approver>,
     pub(crate) cancel: &'a CancellationToken,
     pub(crate) log: Option<&'a mut SessionLog>,
@@ -167,7 +186,6 @@ fn registry() -> &'static [Box<dyn Tool>] {
             Box::new(write::WriteTool),
             Box::new(edit::EditTool),
             Box::new(bash::BashTool),
-            Box::new(agent::AgentTool),
         ]
     })
 }
@@ -178,23 +196,27 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
 
 pub(crate) async fn execute_tool(
     call: &ToolCall,
-    _cfg: &Config,
-    policy: &mut Option<Policy>,
-    approver: &Arc<dyn Approver>,
-    cancel: &CancellationToken,
+    tcx: &mut ToolContext<'_>,
     log: Option<&mut SessionLog>,
-    hooks: &[Hook],
 ) -> Result<ToolResult, CoreError> {
     let mut ctx = ToolCtx {
         call,
         arguments: call.arguments.clone(),
-        policy,
-        approver,
-        cancel,
+        policy: &mut *tcx.policy,
+        unsandboxed: tcx.unsandboxed,
+        approver: tcx.approver,
+        cancel: tcx.cancel,
         log,
     };
-    if let Some(result) = run_pre_tool_use_hooks(&mut ctx, hooks).await? {
+    if let Some(result) = run_pre_tool_use_hooks(&mut ctx, tcx.hooks, tcx.cwd).await? {
         return Ok(result);
+    }
+    // Not in the registry until sub-agents land (M8, PLAN 6.6): advertising a
+    // tool that always fails costs context on every request and invites a
+    // wasted turn (#33). A call that arrives anyway (an old session, a model
+    // that saw it before) gets a plain answer.
+    if call.name == agent::NAME {
+        return agent::unavailable(ctx);
     }
     match registry().iter().find(|t| t.spec().name == call.name) {
         Some(tool) => tool.execute(ctx).await,
@@ -220,10 +242,11 @@ pub(crate) async fn execute_tool(
 async fn run_pre_tool_use_hooks(
     ctx: &mut ToolCtx<'_>,
     hooks: &[Hook],
+    cwd: &Path,
 ) -> Result<Option<ToolResult>, CoreError> {
-    let cwd = std::env::current_dir()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|_| ".".to_string());
+    // The agent's working directory, not the process's (#28): a hook is told
+    // where the agent operates, which is not necessarily where barry runs.
+    let cwd = cwd.display().to_string();
     let name = ctx.call.name.clone();
     for hook in hooks.iter().filter(|h| h.matches(&name)) {
         let input = serde_json::to_string(&ctx.arguments).unwrap_or_default();
@@ -268,7 +291,32 @@ async fn run_pre_tool_use_hooks(
                     .as_mut()
                     .map(|l| l.append(EntryKind::Notice { text: reason }));
             }
-            HookOutcome::Allow | HookOutcome::Ask { .. } => {}
+            HookOutcome::Ask { reason } => {
+                // PLAN 6.5: a hook may ask instead of deciding. The user
+                // answers; a denial is final, an approval still faces the
+                // policy check in the tool.
+                let req = ApprovalRequest {
+                    id: ctx.call.id.clone(),
+                    tool: name.clone(),
+                    summary: format!("{name} (asked by hook)"),
+                    reason: reason.clone(),
+                    grant_path: None,
+                };
+                if ctx.approver.decide(&req).await == ApprovalChoice::Deny {
+                    ctx.record_decision(
+                        &Decision::Deny {
+                            reason: format!("hook asked: {reason}"),
+                        },
+                        &DecidedBy::User,
+                    )?;
+                    return Ok(Some(ToolResult::new(
+                        false,
+                        format!("denied by user (hook asked: {reason})"),
+                        "denied by user".to_string(),
+                    )));
+                }
+            }
+            HookOutcome::Allow => {}
         }
     }
     Ok(None)
@@ -288,19 +336,9 @@ pub(crate) async fn check_write_approval(
     call_id: &str,
     path: &str,
     tool: &str,
-    policy: &mut Option<Policy>,
+    policy: &mut Policy,
     approver: &Arc<dyn Approver>,
 ) -> Result<WriteDecision, CoreError> {
-    // No policy configured → no restrictions.
-    let Some(policy) = policy.as_mut() else {
-        return Ok(WriteDecision {
-            allowed: true,
-            decision: Decision::Allow,
-            decided_by: DecidedBy::Default,
-            grant: None,
-        });
-    };
-
     let (decision, grant_dir) = policy.check_write(Path::new(path));
     match decision {
         Decision::Allow => {
@@ -345,13 +383,15 @@ pub(crate) async fn check_write_approval(
                     decided_by: DecidedBy::User,
                     grant: None,
                 }),
-                ApprovalChoice::Once | ApprovalChoice::AlwaysThisSession => {
-                    let mut granted = None;
-                    if let Some(dir) = grant_path {
-                        if policy.grant_dir(&dir).is_ok() {
-                            granted = Some(dir);
-                        }
-                    }
+                ApprovalChoice::Once => Ok(WriteDecision {
+                    allowed: true,
+                    decision: Decision::Allow,
+                    decided_by: DecidedBy::User,
+                    grant: None,
+                }),
+                ApprovalChoice::AlwaysThisSession => {
+                    let granted =
+                        grant_path.and_then(|dir| policy.grant_dir(&dir).ok().map(|()| dir));
                     Ok(WriteDecision {
                         allowed: true,
                         decision: Decision::Allow,
@@ -364,14 +404,35 @@ pub(crate) async fn check_write_approval(
     }
 }
 
-/// Run a file-modifying tool through the policy + approval flow, record the
-/// decision (and any grant) before the work, then run `work` when allowed.
-pub(crate) async fn run_with_write_approval(
+/// The result the model sees when a write or edit was refused. The policy's
+/// reason is passed through: "denied by user" and "path is a dangling symlink"
+/// call for very different next steps.
+fn denied_result(decision: &Decision) -> ToolResult {
+    let reason = match decision {
+        Decision::Deny { reason } => reason.clone(),
+        _ => "denied by user".to_string(),
+    };
+    ToolResult::new(false, reason.clone(), reason)
+}
+
+/// Resolve the path a write or edit will really touch.
+///
+/// The policy already canonicalised the path to decide; writing to that same
+/// canonical target means a symlink cannot be swapped in between the check and
+/// the write to redirect the bytes elsewhere.
+fn canonical_target(policy: &Policy, path: &str) -> Result<PathBuf, CoreError> {
+    barry_policy::canonicalise(policy.cwd(), Path::new(path))
+        .map_err(|e| CoreError::Provider(format!("cannot resolve path: {e}")))
+}
+
+/// Run a file-modifying tool through the policy + approval flow and record
+/// the decision (and any grant) before the work. Returns the canonical target
+/// to modify when allowed, or the refusal result for the model.
+pub(crate) async fn authorise_write(
     ctx: &mut ToolCtx<'_>,
     tool: &str,
     path: &str,
-    work: impl FnOnce() -> Result<ToolResult, CoreError>,
-) -> Result<ToolResult, CoreError> {
+) -> Result<Result<PathBuf, ToolResult>, CoreError> {
     let decision = check_write_approval(&ctx.call.id, path, tool, ctx.policy, ctx.approver).await?;
     // Record the approval before doing the work, so a crash cannot lose it.
     ctx.record_decision(&decision.decision, &decision.decided_by)?;
@@ -379,13 +440,11 @@ pub(crate) async fn run_with_write_approval(
         record_grant(&mut ctx.log, dir)?;
     }
     if decision.allowed {
-        work()
+        // Write through the canonical target, so what the policy approved is
+        // exactly what is written even if the path is a symlink.
+        Ok(Ok(canonical_target(ctx.policy, path)?))
     } else {
-        Ok(ToolResult::new(
-            false,
-            "denied by user".to_string(),
-            "denied by user".to_string(),
-        ))
+        Ok(Err(denied_result(&decision.decision)))
     }
 }
 
@@ -396,7 +455,7 @@ mod tests {
     #[test]
     fn registry_names_are_unique_and_ordered() {
         let names: Vec<String> = tool_specs().into_iter().map(|s| s.name).collect();
-        assert_eq!(names, ["read", "write", "edit", "bash", "agent"]);
+        assert_eq!(names, ["read", "write", "edit", "bash"]);
     }
 
     #[test]

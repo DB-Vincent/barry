@@ -4,7 +4,10 @@ use barry_protocol::ToolSpec;
 use futures::future::BoxFuture;
 use serde_json::json;
 
-use super::{run_with_write_approval, Tool, ToolCtx, ToolResult};
+use std::path::Path;
+
+use super::write::write_file;
+use super::{authorise_write, Tool, ToolCtx, ToolResult};
 use crate::CoreError;
 
 pub(super) struct EditTool;
@@ -35,41 +38,57 @@ async fn run(mut ctx: ToolCtx<'_>) -> Result<ToolResult, CoreError> {
     let path = ctx.str_arg("path");
     let old_string = ctx.str_arg("old_string");
     let new_string = ctx.str_arg("new_string");
-    run_with_write_approval(&mut ctx, "edit", &path, || {
-        edit_file(&path, &old_string, &new_string)
-    })
-    .await
+    match authorise_write(&mut ctx, "edit", &path).await? {
+        Ok(target) => edit_file(&target, &old_string, &new_string).await,
+        Err(denied) => Ok(denied),
+    }
 }
 
-fn edit_file(path: &str, old_string: &str, new_string: &str) -> Result<ToolResult, CoreError> {
-    let content = std::fs::read_to_string(path).map_err(|e| CoreError::Provider(e.to_string()))?;
+async fn edit_file(
+    path: &Path,
+    old_string: &str,
+    new_string: &str,
+) -> Result<ToolResult, CoreError> {
+    let content = tokio::fs::read_to_string(path)
+        .await
+        .map_err(CoreError::Io)?;
     let count = content.matches(old_string).count();
 
     match count {
         0 => Ok(ToolResult::new(
             false,
-            format!("no matches found for '{}' in {}", old_string, path),
-            format!("no matches found for '{}'", old_string),
+            format!(
+                "no matches found for '{}' in {}",
+                old_string,
+                path.display()
+            ),
+            format!("no match to edit in {}", path.display()),
         )),
         1 => {
             let new_content = content.replacen(old_string, new_string, 1);
-            std::fs::write(path, &new_content).map_err(|e| CoreError::Provider(e.to_string()))?;
+            write_file(path, &new_content)
+                .await
+                .map_err(CoreError::Io)?;
             Ok(ToolResult::new(
                 true,
                 format!(
                     "replaced 1 occurrence of '{}' with '{}' in {}",
-                    old_string, new_string, path
+                    old_string,
+                    new_string,
+                    path.display()
                 ),
-                format!("replaced '{}' with '{}'", old_string, new_string),
+                format!("edited {}", path.display()),
             ))
         }
         n => Ok(ToolResult::new(
             false,
             format!(
                 "found {} matches for '{}' in {}; no changes made",
-                n, old_string, path
+                n,
+                old_string,
+                path.display()
             ),
-            format!("found {} matches for '{}'; no changes made", n, old_string),
+            format!("{} matches in {}; no changes made", n, path.display()),
         )),
     }
 }

@@ -104,13 +104,16 @@ async fn bc_2_8_unknown_tool_is_ok_false_result() {
             max_turns: 10,
             context_window: 32_768,
             sandbox_network: true,
+            sandbox_unsandboxed: true,
+            redact_tool_output: false,
             fs_read_deny: vec![],
             fs_protected: vec![],
+            rules: vec![],
             hooks: vec![],
         },
         provider.clone(),
         Arc::new(LocalApprover),
-        None,
+        permissive_policy(),
     )
     .expect("agent constructs");
 
@@ -167,4 +170,20 @@ async fn bc_2_8_unknown_tool_is_ok_false_result() {
         }
         other => panic!("expected a Tool message, got {other:?}"),
     }
+}
+
+/// A policy with no rules and no read-deny, for tests that cover the turn loop
+/// and the tool plumbing rather than the policy engine (#30). It pre-approves
+/// nothing: a write outside its own cwd goes to the test approver.
+fn permissive_policy() -> barry_policy::Policy {
+    barry_policy::Policy::new(barry_policy::PolicyConfig {
+        cwd: std::env::temp_dir().join("barry-test-policy-cwd"),
+        home: std::env::temp_dir().join("barry-test-policy-home"),
+        extra_writable: vec![],
+        read_deny: vec![],
+        protected: vec![],
+        rules: vec![],
+        network: true,
+    })
+    .expect("policy constructs")
 }

@@ -36,8 +36,10 @@ pub(crate) fn command(
     // Protected read-only paths. Skip a protected deny when the user granted
     // that path (or a parent), so a grant reliably overrides protection
     // regardless of how Seatbelt resolves equal-specificity rules (BC-4.5).
+    // Seatbelt rules are path-based, so a path that does not exist yet is
+    // still protected if it appears later (issue #16).
     for (i, p) in spec.protected_ro.iter().enumerate() {
-        if p.exists() && !spec.grants.iter().any(|g| p.starts_with(g)) {
+        if !spec.grants.iter().any(|g| p.starts_with(g)) {
             profile.push_str(&format!(
                 "(deny file-write* (subpath (param \"PROTECTED_{}\")))\n",
                 i
@@ -57,14 +59,18 @@ pub(crate) fn command(
         }
     }
 
-    // Read-deny paths.
-    for (i, p) in spec.read_deny.iter().enumerate() {
-        if p.exists() {
-            profile.push_str(&format!(
-                "(deny file-read* (subpath (param \"DENY_READ_{}\")))\n",
-                i
-            ));
-        }
+    // Read-deny paths. Seatbelt resolves a path filter when the profile is
+    // compiled, so a read-deny entry that does not exist yet matches nothing
+    // here; on Linux the same path is masked by a tmpfs mount, which is what
+    // makes a directory created later stay inside the sandbox (#16). Writes
+    // are denied too, so an entry that does exist is neither readable nor
+    // writable from a sandboxed command.
+    for i in 0..spec.read_deny.len() {
+        profile.push_str(&format!(
+            "(deny file-read* (subpath (param \"DENY_READ_{0}\")))\n\
+             (deny file-write* (subpath (param \"DENY_READ_{0}\")))\n",
+            i
+        ));
     }
 
     // Network.
@@ -78,7 +84,7 @@ pub(crate) fn command(
             .arg(format!("WRITABLE_ROOT_{}={}", i, root.display()));
     }
     for (i, p) in spec.protected_ro.iter().enumerate() {
-        if p.exists() && !spec.grants.iter().any(|g| p.starts_with(g)) {
+        if !spec.grants.iter().any(|g| p.starts_with(g)) {
             cmd.arg("-D")
                 .arg(format!("PROTECTED_{}={}", i, p.display()));
         }
@@ -89,10 +95,8 @@ pub(crate) fn command(
         }
     }
     for (i, p) in spec.read_deny.iter().enumerate() {
-        if p.exists() {
-            cmd.arg("-D")
-                .arg(format!("DENY_READ_{}={}", i, p.display()));
-        }
+        cmd.arg("-D")
+            .arg(format!("DENY_READ_{}={}", i, p.display()));
     }
 
     cmd.arg("-p").arg(&profile);

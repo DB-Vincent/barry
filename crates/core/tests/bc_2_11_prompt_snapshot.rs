@@ -1,6 +1,6 @@
 /// BC-2.11 The tool list sent to the model contains exactly
-/// `read, write, edit, bash, agent`, and the system prompt matches the
-/// approved snapshot (insta).
+/// `read, write, edit, bash` — the agent tool stays hidden until sub-agents
+/// exist (#33) — and the system prompt matches the approved snapshot (insta).
 ///
 /// The prompt is checked through the wire-shaped `LlmRequest` rather than by
 /// calling the builder directly, so the snapshot covers what the model really
@@ -62,15 +62,15 @@ impl Approver for LocalApprover {
     }
 }
 
-fn done_agent_call() -> LlmEvent {
+fn done_read_call(path: &str) -> LlmEvent {
     LlmEvent::Done {
         message: Message::Assistant {
             content: None,
             reasoning: None,
             tool_calls: vec![barry_protocol::ToolCall {
                 id: "call_1".to_string(),
-                name: "agent".to_string(),
-                arguments: json!({ "task": "look around" }),
+                name: "read".to_string(),
+                arguments: json!({ "path": path }),
             }],
         },
         stop: StopReason::ToolCalls,
@@ -100,8 +100,11 @@ async fn collect_events(mut rx: mpsc::Receiver<Event>) -> Vec<Event> {
 
 #[tokio::test]
 async fn bc_2_11_tool_list_is_exact_and_prompt_matches_snapshot() {
+    let fixture = tempfile::tempdir().unwrap();
+    let note = fixture.path().join("note.txt");
+    std::fs::write(&note, "hi\n").unwrap();
     let provider = Arc::new(RecordingProvider::new(vec![
-        done_agent_call(),
+        done_read_call(note.to_str().unwrap()),
         LlmEvent::TextDelta("ok".to_string()),
         done_text("ok"),
     ]));
@@ -117,13 +120,16 @@ async fn bc_2_11_tool_list_is_exact_and_prompt_matches_snapshot() {
                 max_turns: 10,
                 context_window: 32_768,
                 sandbox_network: true,
+                sandbox_unsandboxed: true,
+                redact_tool_output: false,
                 fs_read_deny: vec![],
                 fs_protected: vec![],
+                rules: vec![],
                 hooks: vec![],
             },
             provider.clone(),
             Arc::new(LocalApprover),
-            None,
+            permissive_policy(),
         )
         .expect("agent constructs");
         std::env::remove_var("HOME");
@@ -140,13 +146,13 @@ async fn bc_2_11_tool_list_is_exact_and_prompt_matches_snapshot() {
     let requests = provider.requests.lock().unwrap();
     assert!(requests.len() >= 2, "expected a follow-up request");
 
-    // Exactly the five tools, in the order PLAN 5.1 lists them.
+    // Exactly the four implemented tools, in the order PLAN 5.1 lists them.
     let names: Vec<&str> = requests[0]
         .tools
         .iter()
         .map(|spec| spec.name.as_str())
         .collect();
-    assert_eq!(names, ["read", "write", "edit", "bash", "agent"]);
+    assert_eq!(names, ["read", "write", "edit", "bash"]);
 
     let system_of = |index: usize| -> String {
         match &requests[index].messages[0] {
@@ -178,4 +184,20 @@ async fn bc_2_11_tool_list_is_exact_and_prompt_matches_snapshot() {
         normalized.truncate(pos);
     }
     insta::assert_snapshot!(normalized);
+}
+
+/// A policy with no rules and no read-deny, for tests that cover the turn loop
+/// and the tool plumbing rather than the policy engine (#30). It pre-approves
+/// nothing: a write outside its own cwd goes to the test approver.
+fn permissive_policy() -> barry_policy::Policy {
+    barry_policy::Policy::new(barry_policy::PolicyConfig {
+        cwd: std::env::temp_dir().join("barry-test-policy-cwd"),
+        home: std::env::temp_dir().join("barry-test-policy-home"),
+        extra_writable: vec![],
+        read_deny: vec![],
+        protected: vec![],
+        rules: vec![],
+        network: true,
+    })
+    .expect("policy constructs")
 }

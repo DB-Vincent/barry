@@ -1,6 +1,7 @@
-//! BC-6.4 / 6.5 Compaction: when the context estimate passes the threshold,
-//! old tool outputs are cleared first; if that is not enough, a summary is
-//! requested and the old messages are replaced.
+//! BC-6.4 Compaction reduces memory without losing the conversation: old tool
+//! outputs are cleared first, then only the turns before the newest ones are
+//! summarised. The request being answered and its pending tool calls stay
+//! verbatim, and an empty summary never replaces the context (#21).
 use barry_core::{Agent, Approver, BoxFuture};
 use barry_llm::{LlmEvent, LlmRequest, Provider};
 use barry_protocol::{ApprovalChoice, ApprovalRequest, Message, StopReason, ToolCall};
@@ -83,75 +84,160 @@ fn config_with_window(window: u64) -> barry_core::config::Config {
         max_turns: 50,
         context_window: window,
         sandbox_network: true,
+        sandbox_unsandboxed: true,
+        redact_tool_output: false,
         fs_read_deny: vec![],
         fs_protected: vec![],
+        rules: vec![],
         hooks: vec![],
     }
 }
 
-#[tokio::test]
-async fn bc_6_5_summarises_when_clearing_is_not_enough() {
-    // Small context window: threshold = 20000 - 16384 = 3616 estimated tokens.
-    // The single bash result (~6,000 tokens) is under the 20,000-token keep
-    // window, so clearing does nothing and a summarisation request is sent.
-    let provider = Arc::new(RecordingProvider::new(vec![
-        // Turn 1: ask for a bash command.
-        done_tool(
-            "bash",
-            json!({"command": "head -c 100000 /dev/zero | tr '\\0' 'x'"}),
-        ),
-        // The summarisation request (step 2) is answered with a summary.
-        done_text("the summary"),
-        // Turn 2: after summarisation, the model answers.
-        done_text("done"),
-    ]));
+/// A 20,000-byte bash output: big enough that four turns exceed the threshold
+/// of a 30,000-token window (13,616 estimated tokens, ~54 KB) while two turns
+/// stay under it.
+fn bash_filling(byte: &str) -> LlmEvent {
+    done_tool(
+        "bash",
+        json!({ "command": format!("head -c 20000 /dev/zero | tr '\\0' '{byte}'") }),
+    )
+}
 
+/// Replies for four turns that each leave a large tool output behind.
+///
+/// The summarisation request comes before turn three's answer: turn three's
+/// second request is the first one over the threshold.
+fn four_turn_replies() -> Vec<LlmEvent> {
+    vec![
+        bash_filling("a"),
+        done_text("first done"),
+        bash_filling("b"),
+        done_text("second done"),
+        bash_filling("c"),
+        done_text("the summary"),
+        done_text("third done"),
+        done_text("fourth done"),
+    ]
+}
+
+async fn run(agent: &mut Agent, prompt: &str) -> StopReason {
+    let (tx, _rx) = mpsc::channel(32);
+    agent
+        .run_turn(prompt, tx, CancellationToken::new())
+        .await
+        .expect("turn completes")
+}
+
+#[tokio::test]
+async fn bc_6_4_summarises_older_turns_and_keeps_the_newest() {
+    let provider = Arc::new(RecordingProvider::new(four_turn_replies()));
     let mut agent = Agent::new(
-        config_with_window(20_000),
+        config_with_window(30_000),
         provider.clone(),
         Arc::new(AlwaysAllow),
-        None,
+        permissive_policy(),
     )
     .expect("agent");
 
-    let (tx, _rx) = mpsc::channel(32);
-    agent
-        .run_turn("run a command", tx, CancellationToken::new())
-        .await
-        .expect("turn completes");
+    assert_eq!(run(&mut agent, "first request").await, StopReason::Stop);
+    assert_eq!(run(&mut agent, "second request").await, StopReason::Stop);
+    assert_eq!(run(&mut agent, "third request").await, StopReason::Stop);
+    assert_eq!(run(&mut agent, "fourth request").await, StopReason::Stop);
 
     let requests = provider.requests.lock().unwrap().clone();
-    // Turn 1, the summarisation request, then turn 2.
-    assert_eq!(requests.len(), 3, "expected 3 requests: {requests:?}");
+    // Turns one and two cost a request before and after their tool call; turn
+    // three's second request is the first one over the threshold, so it is
+    // preceded by the summarisation request.
+    assert_eq!(requests.len(), 8, "expected 8 requests");
 
-    // The second request is the summarisation request (no tools).
-    let summarise = &requests[1];
+    // The summarisation request carries only the turn it replaces.
+    let summarise = serde_json::to_string(&requests[5]).unwrap();
+    assert!(requests[5].tools.is_empty(), "summarise has no tools");
+    assert!(summarise.contains("Summarise"), "{summarise:.200}");
     assert!(
-        summarise.tools.is_empty(),
-        "summarise has no tools: {summarise:?}"
+        summarise.contains("first request"),
+        "it summarises the oldest turn: {summarise:.200}"
     );
-    let has_summary_prompt = summarise
-        .messages
-        .iter()
-        .any(|m| matches!(m, Message::User { content } if content.contains("Summarise")));
     assert!(
-        has_summary_prompt,
-        "summarisation request contains the summary prompt: {summarise:?}"
+        !summarise.contains("second request") && !summarise.contains("third request"),
+        "it leaves the recent turns alone: {summarise:.200}"
     );
 
-    // Turn 2 receives the summary, not the raw tool output.
-    let turn2 = &requests[2];
-    let rendered = serde_json::to_string(turn2).unwrap();
+    // The request sent straight after: summary in place of turn one, the
+    // previous turn and the in-flight turn three verbatim.
+    let kept = serde_json::to_string(&requests[6]).unwrap();
     assert!(
-        rendered.contains("[Summary of earlier conversation]"),
-        "turn 2 carries the summary: {rendered}"
+        kept.contains("[Summary of earlier conversation]") && kept.contains("the summary"),
+        "the summary replaces the older turn: {kept:.200}"
     );
     assert!(
-        rendered.contains("the summary"),
-        "turn 2 carries the summary text: {rendered}"
+        kept.contains("third request") && kept.contains("'c'"),
+        "the request being answered and its pending tool call are kept: {kept:.200}"
     );
     assert!(
-        !rendered.contains("head -c"),
-        "turn 2 does not carry the raw tool output: {rendered}"
+        kept.contains("second done") && kept.contains("'b'"),
+        "the previous turn is kept verbatim: {kept:.200}"
     );
+    assert!(
+        !kept.contains("first request") && !kept.contains("'a'"),
+        "only the summarised turn is gone: {kept:.200}"
+    );
+
+    // The history stays compacted for the next turn.
+    let fourth = serde_json::to_string(&requests[7]).unwrap();
+    assert!(
+        fourth.contains("[Summary of earlier conversation]") && fourth.contains("fourth request"),
+        "the next turn carries the summary and its own request: {fourth:.200}"
+    );
+}
+
+#[tokio::test]
+async fn bc_6_4_an_empty_summary_leaves_the_context_alone() {
+    let provider = Arc::new(RecordingProvider::new(vec![
+        done_text("previous answer"),
+        // The summarisation request is answered with nothing at all.
+        done_text(""),
+        done_text("after"),
+    ]));
+    let mut agent = Agent::new(
+        config_with_window(30_000),
+        provider.clone(),
+        Arc::new(AlwaysAllow),
+        permissive_policy(),
+    )
+    .expect("agent");
+
+    assert_eq!(run(&mut agent, "a previous turn").await, StopReason::Stop);
+    let compacted = agent.compact().await.expect("compact runs");
+    assert!(
+        !compacted,
+        "a summary with no text must not replace the context"
+    );
+
+    assert_eq!(run(&mut agent, "after").await, StopReason::Stop);
+
+    let requests = provider.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 3);
+    let rendered = serde_json::to_string(&requests[2]).unwrap();
+    assert!(
+        rendered.contains("a previous turn") && rendered.contains("previous answer"),
+        "the history survived the empty summary: {rendered:.200}"
+    );
+    assert!(!rendered.contains("[Summary of earlier conversation]"));
+}
+
+/// A policy with no rules and no read-deny, for tests that cover the turn loop
+/// and the tool plumbing rather than the policy engine (#30). It pre-approves
+/// nothing: a write outside its own cwd goes to the test approver.
+fn permissive_policy() -> barry_policy::Policy {
+    barry_policy::Policy::new(barry_policy::PolicyConfig {
+        cwd: std::env::temp_dir().join("barry-test-policy-cwd"),
+        home: std::env::temp_dir().join("barry-test-policy-home"),
+        extra_writable: vec![],
+        read_deny: vec![],
+        protected: vec![],
+        rules: vec![],
+        network: true,
+    })
+    .expect("policy constructs")
 }

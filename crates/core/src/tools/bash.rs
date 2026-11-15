@@ -1,6 +1,5 @@
 //! The `bash` tool: policy check, optional OS sandbox, denial-retry.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use barry_policy::Policy;
@@ -8,12 +7,13 @@ use barry_protocol::{ApprovalChoice, ApprovalRequest, DecidedBy, Decision, ToolS
 use barry_sandbox::{self as sandbox, SandboxSpec};
 use futures::future::BoxFuture;
 use serde_json::json;
+use tokio::io::AsyncReadExt;
 use tokio_util::sync::CancellationToken;
 
 use super::{record_decision, record_grant, record_prefix, Tool, ToolCtx, ToolResult};
-use crate::context::truncate;
+use crate::bounded::{StreamCapture, STREAM_LIMIT};
 use crate::session::SessionLog;
-use crate::{Approver, CoreError};
+use crate::CoreError;
 
 pub(super) struct BashTool;
 
@@ -60,20 +60,23 @@ async fn run(ctx: ToolCtx<'_>) -> Result<ToolResult, CoreError> {
     let ToolCtx {
         call,
         policy,
+        unsandboxed,
         approver,
         cancel,
         mut log,
         ..
     } = ctx;
-
-    // Policy check: deny > grant > ask > allow.
-    let Some(policy) = policy.as_mut() else {
-        // No policy → run unsandboxed (backstop for headless/cli
-        // without policy).
-        record_decision(&mut log, call, &Decision::Allow, &DecidedBy::Default)?;
-        return execute_bash_none(command, timeout_secs, cancel).await;
+    let mut run_ctx = RunCtx {
+        policy,
+        unsandboxed,
+        approver,
+        cancel,
     };
-    let (decision, rule_id) = policy.check_bash(command);
+
+    // Policy check: deny > grant > ask > allow. The policy decides even when
+    // the OS sandbox is off (#30): dropping the sandbox must not also drop the
+    // deny rules and approvals.
+    let (decision, rule_id) = run_ctx.policy.check_bash(command);
     let decided_by = match rule_id.as_deref() {
         // A session prefix grant is a user decision, not a rule id.
         Some(grant) if grant.starts_with("grant: ") => DecidedBy::User,
@@ -104,7 +107,7 @@ async fn run(ctx: ToolCtx<'_>) -> Result<ToolResult, CoreError> {
                 reason: reason.clone(),
                 grant_path: None,
             };
-            match approver.decide(&req).await {
+            match run_ctx.approver.decide(&req).await {
                 ApprovalChoice::Deny => {
                     record_decision(
                         &mut log,
@@ -120,22 +123,31 @@ async fn run(ctx: ToolCtx<'_>) -> Result<ToolResult, CoreError> {
                         "denied by user".to_string(),
                     ))
                 }
-                ApprovalChoice::Once | ApprovalChoice::AlwaysThisSession => {
-                    // Grant the first word of the command as a session prefix.
-                    let prefix = command.split_whitespace().next().map(str::to_string);
-                    if let Some(first_word) = &prefix {
-                        policy.approve_prefix(first_word);
-                    }
+                // "Once" runs this one command and records nothing:
+                // approving on demand must not silently approve every
+                // later command that starts with the same word.
+                ApprovalChoice::Once => {
                     record_decision(&mut log, call, &Decision::Allow, &DecidedBy::User)?;
-                    if let Some(prefix) = &prefix {
-                        record_prefix(&mut log, prefix)?;
-                    }
-                    run_sandboxed_with_retry(
-                        policy,
+                    run_bash(
+                        &mut run_ctx,
                         command,
                         timeout_secs,
-                        cancel,
-                        approver,
+                        call.id.clone(),
+                        &mut log,
+                    )
+                    .await
+                }
+                ApprovalChoice::AlwaysThisSession => {
+                    let prefix = session_prefix(command);
+                    if let Some(prefix) = &prefix {
+                        run_ctx.policy.approve_prefix(prefix.clone());
+                        record_prefix(&mut log, &prefix.join(" "))?;
+                    }
+                    record_decision(&mut log, call, &Decision::Allow, &DecidedBy::User)?;
+                    run_bash(
+                        &mut run_ctx,
+                        command,
+                        timeout_secs,
                         call.id.clone(),
                         &mut log,
                     )
@@ -145,17 +157,38 @@ async fn run(ctx: ToolCtx<'_>) -> Result<ToolResult, CoreError> {
         }
         Decision::Allow => {
             record_decision(&mut log, call, &Decision::Allow, &decided_by)?;
-            run_sandboxed_with_retry(
-                policy,
+            run_bash(
+                &mut run_ctx,
                 command,
                 timeout_secs,
-                cancel,
-                approver,
                 call.id.clone(),
                 &mut log,
             )
             .await
         }
+    }
+}
+
+/// The parts of the call context that running a command needs.
+struct RunCtx<'a> {
+    policy: &'a mut Policy,
+    unsandboxed: bool,
+    approver: &'a std::sync::Arc<dyn crate::Approver>,
+    cancel: &'a CancellationToken,
+}
+
+/// The argv prefix "always this session" grants for a command: the first two
+/// tokens, or the first when there is only one (PLAN 6.1.3).
+fn session_prefix(command: &str) -> Option<Vec<String>> {
+    let prefix: Vec<String> = command
+        .split_whitespace()
+        .take(2)
+        .map(str::to_string)
+        .collect();
+    if prefix.is_empty() {
+        None
+    } else {
+        Some(prefix)
     }
 }
 
@@ -169,18 +202,33 @@ fn kill_process_group(pid: u32) {
 }
 
 /// Returns `true` if a tool result indicates the sandbox blocked the command.
-/// The command failed (ok:false, exit_code != 0) and stderr contains a
-/// sandbox denial message ("Operation not permitted", "Read-only file system",
-/// "Permission denied", or "No such file or directory" when writing outside
-/// the writable roots).
-fn sandbox_denied(result: &ToolResult) -> bool {
-    !result.ok
-        && result.content.contains("exit_code:")
-        && !result.content.starts_with("exit_code: 0")
-        && (result.content.contains("Operation not permitted")
-            || result.content.contains("Read-only file system")
-            || result.content.contains("Permission denied")
-            || result.content.contains("No such file or directory"))
+///
+/// The command must have failed (ok:false, non-zero exit) with a message only
+/// the sandbox produces: "Operation not permitted" for a seccomp denial,
+/// "Read-only file system" or "Permission denied" for a mount denial.
+///
+/// "No such file or directory" is deliberately not one of those. A plain
+/// `cat missing.txt` prints exactly that, and treating it as a denial asked the
+/// user to grant a directory because of a typo (#20). It counts only when the
+/// command writes and its redirect target names a directory, which is how a
+/// write outside the writable roots fails.
+fn sandbox_denied(result: &ToolResult, command: &str) -> bool {
+    if result.ok
+        || !result.content.contains("exit_code:")
+        || result.content.starts_with("exit_code: 0")
+    {
+        return false;
+    }
+
+    if result.content.contains("Operation not permitted")
+        || result.content.contains("Read-only file system")
+        || result.content.contains("Permission denied")
+    {
+        return true;
+    }
+
+    result.content.contains("No such file or directory")
+        && sandbox_denied_dir(result, command).is_some()
 }
 
 /// Extracts the directory path that the sandbox denied access to.
@@ -220,8 +268,12 @@ fn sandbox_denied_dir(_result: &ToolResult, command: &str) -> Option<std::path::
     None
 }
 
-/// Run bash directly (no sandbox). Used when no policy is configured.
-async fn execute_bash_none(
+/// Run bash directly, without the OS sandbox (#30).
+///
+/// Only reachable when the config says `sandbox.unsandboxed = true`, which the
+/// session log records at startup. Never a fallback for a missing policy or
+/// for a sandbox that failed to start: those fail closed.
+async fn run_bash_direct(
     command: &str,
     timeout_secs: u64,
     cancel: &CancellationToken,
@@ -243,7 +295,36 @@ async fn execute_bash_sandboxed(
     run_bash_command(cmd, timeout_secs, cancel).await
 }
 
+/// Read one pipe into `capture`, killing the process group once the stream
+/// has produced more than the capture limit (#19).
+///
+/// Nothing past the limit would ever reach the model, so draining the rest can
+/// only cost time and memory.
+async fn drain_bounded<R>(
+    reader: &mut R,
+    capture: &mut StreamCapture,
+    pid: u32,
+) -> std::io::Result<()>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut chunk = [0u8; 8 * 1024];
+    loop {
+        let read = reader.read(&mut chunk).await?;
+        if read == 0 {
+            return Ok(());
+        }
+        if !capture.push(&chunk[..read]) {
+            kill_process_group(pid);
+            return Ok(());
+        }
+    }
+}
+
 /// Common execution logic: spawn, race cancel vs timeout vs completion.
+///
+/// Both pipes are drained as the command writes, so memory stays bounded no
+/// matter how much it prints (#19).
 async fn run_bash_command(
     cmd: tokio::process::Command,
     timeout_secs: u64,
@@ -254,13 +335,34 @@ async fn run_bash_command(
         .stderr(std::process::Stdio::piped())
         .process_group(0);
 
-    let child = cmd
-        .spawn()
-        .map_err(|e| CoreError::Provider(format!("failed to run command: {e}")))?;
+    let mut child = cmd.spawn().map_err(CoreError::Io)?;
 
     let child_id = child.id().unwrap_or(0);
 
-    let wait = async move { child.wait_with_output().await };
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| CoreError::Provider("no stdout pipe".to_string()))?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| CoreError::Provider("no stderr pipe".to_string()))?;
+
+    let mut out_capture = StreamCapture::new(STREAM_LIMIT);
+    let mut err_capture = StreamCapture::new(STREAM_LIMIT);
+
+    // Both pipes must be read concurrently: a command that fills the pipe it
+    // is not being read from would block until the timeout.
+    let wait = async move {
+        let (out_result, err_result) = tokio::join!(
+            drain_bounded(&mut stdout, &mut out_capture, child_id),
+            drain_bounded(&mut stderr, &mut err_capture, child_id),
+        );
+        let status = child.wait().await?;
+        out_result?;
+        err_result?;
+        Ok::<_, std::io::Error>((status, out_capture, err_capture))
+    };
 
     tokio::select! {
         biased;
@@ -270,15 +372,26 @@ async fn run_bash_command(
         }
         result = tokio::time::timeout(Duration::from_secs(timeout_secs), wait) => {
             match result {
-                Ok(Ok(output)) => {
-                    let exit_code = output.status.code().unwrap_or(-1);
-                    let stdout_raw = String::from_utf8_lossy(&output.stdout);
-                    let stderr_raw = String::from_utf8_lossy(&output.stderr);
-                    let stdout = truncate(&stdout_raw, 30_000);
-                    let stderr = truncate(&stderr_raw, 30_000);
+                Ok(Ok((status, out_capture, err_capture))) => {
+                    let exit_code = status.code().unwrap_or(-1);
+                    let out_limited = out_capture.limited();
+                    let err_limited = err_capture.limited();
+                    let mut stdout_text = out_capture.into_text();
+                    let mut stderr_text = err_capture.into_text();
+                    if out_limited || err_limited {
+                        let note = format!(
+                            "\n[... output over {STREAM_LIMIT} bytes; command killed ...]"
+                        );
+                        if out_limited {
+                            stdout_text.push_str(&note);
+                        }
+                        if err_limited {
+                            stderr_text.push_str(&note);
+                        }
+                    }
 
                     let content =
-                        format!("exit_code: {exit_code}\nstdout: {stdout}\nstderr: {stderr}");
+                        format!("exit_code: {exit_code}\nstdout: {stdout_text}\nstderr: {stderr_text}");
                     Ok(ToolResult::new(
                         exit_code == 0,
                         content,
@@ -286,9 +399,7 @@ async fn run_bash_command(
                     )
                     .with_exit_code(Some(exit_code)))
                 }
-                Ok(Err(io_err)) => Err(CoreError::Provider(format!(
-                    "failed to read command output: {io_err}"
-                ))),
+                Ok(Err(io_err)) => Err(CoreError::Io(io_err)),
                 Err(_elapsed) => {
                     kill_process_group(child_id);
                     Ok(ToolResult::new(
@@ -310,12 +421,10 @@ fn sandbox_spec(policy: &Policy) -> SandboxSpec {
         writable_roots: policy.writable_roots().to_vec(),
         grants: policy.grants().to_vec(),
         read_deny: policy.read_deny_paths().to_vec(),
-        protected_ro: policy
-            .protected()
-            .iter()
-            .map(|p| policy.cwd().join(p))
-            .filter(|p| p.exists())
-            .collect(),
+        // Every protected path under every writable root, including nested
+        // repositories. Computed by the policy, not `cwd.join(p)` here, so an
+        // extra writable root or a submodule is protected too.
+        protected_ro: policy.protected_paths().to_vec(),
         network: policy.network(),
     }
 }
@@ -326,17 +435,20 @@ fn sandbox_spec(policy: &Policy) -> SandboxSpec {
 /// sandbox denial message), offer the user a directory grant and retry once
 /// (PLAN 6.2, BC-4.2). If the user denies the grant, the original sandbox
 /// failure goes to the model unchanged.
-async fn run_sandboxed_with_retry(
-    policy: &mut Policy,
+async fn run_bash(
+    ctx: &mut RunCtx<'_>,
     command: &str,
     timeout_secs: u64,
-    cancel: &CancellationToken,
-    approver: &Arc<dyn Approver>,
     call_id: String,
     log: &mut Option<&mut SessionLog>,
 ) -> Result<ToolResult, CoreError> {
-    let first = execute_bash_sandboxed(sandbox_spec(policy), command, timeout_secs, cancel).await?;
-    if !sandbox_denied(&first) {
+    if ctx.unsandboxed {
+        return run_bash_direct(command, timeout_secs, ctx.cancel).await;
+    }
+
+    let first =
+        execute_bash_sandboxed(sandbox_spec(ctx.policy), command, timeout_secs, ctx.cancel).await?;
+    if !sandbox_denied(&first, command) {
         return Ok(first);
     }
 
@@ -353,16 +465,17 @@ async fn run_sandboxed_with_retry(
         grant_path: Some(target_dir.clone()),
     };
 
-    match approver.decide(&req).await {
+    match ctx.approver.decide(&req).await {
         // Denial: the model sees the original sandbox failure, not a generic
         // "denied by user", so it can reason about the actual block.
         ApprovalChoice::Deny => Ok(first),
         ApprovalChoice::Once | ApprovalChoice::AlwaysThisSession => {
-            policy
+            ctx.policy
                 .grant_dir(&target_dir)
                 .map_err(|e| CoreError::Provider(format!("failed to grant directory: {e}")))?;
             record_grant(log, &target_dir)?;
-            execute_bash_sandboxed(sandbox_spec(policy), command, timeout_secs, cancel).await
+            execute_bash_sandboxed(sandbox_spec(ctx.policy), command, timeout_secs, ctx.cancel)
+                .await
         }
     }
 }
