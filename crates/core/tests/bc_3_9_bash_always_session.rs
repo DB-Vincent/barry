@@ -103,6 +103,7 @@ async fn bc_3_9_bash_always_this_session_persists_in_session() {
         Config {
             default_model: "test".to_string(),
             max_turns: 10,
+            context_window: 32_768,
             sandbox_network: true,
             fs_read_deny: vec![],
             fs_protected: vec![],
@@ -176,6 +177,7 @@ async fn bc_3_9_bash_always_this_session_persists_in_session() {
         Config {
             default_model: "test".to_string(),
             max_turns: 10,
+            context_window: 32_768,
             sandbox_network: true,
             fs_read_deny: vec![],
             fs_protected: vec![],

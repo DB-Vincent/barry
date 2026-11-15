@@ -103,6 +103,7 @@ async fn bc_3_4_grant_does_not_carry_to_new_session() {
         Config {
             default_model: "test".to_string(),
             max_turns: 10,
+            context_window: 32_768,
             sandbox_network: true,
             fs_read_deny: vec![],
             fs_protected: vec![],
@@ -146,6 +147,7 @@ async fn bc_3_4_grant_does_not_carry_to_new_session() {
         Config {
             default_model: "test".to_string(),
             max_turns: 10,
+            context_window: 32_768,
             sandbox_network: true,
             fs_read_deny: vec![],
             fs_protected: vec![],

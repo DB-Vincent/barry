@@ -80,6 +80,7 @@ async fn bc_2_6_turn_limit_emits_notice_and_stops() {
         Config {
             default_model: "test".to_string(),
             max_turns: 2,
+            context_window: 32_768,
             sandbox_network: true,
             fs_read_deny: vec![],
             fs_protected: vec![],

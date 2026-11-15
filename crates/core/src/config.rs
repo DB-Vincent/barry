@@ -24,6 +24,8 @@ pub enum ConfigError {
 pub struct Config {
     pub default_model: String,
     pub max_turns: u64,
+    /// Context window used for compaction heuristics (tokens).
+    pub context_window: u64,
     /// Sandbox: whether bash commands may access the network.
     pub sandbox_network: bool,
     /// Filesystem: paths whose contents must never be read (expanded `~`,
@@ -39,6 +41,7 @@ impl Default for Config {
         Self {
             default_model: "local".to_string(),
             max_turns: 50,
+            context_window: 32_768,
             sandbox_network: true,
             fs_read_deny: vec![],
             fs_protected: vec![],
@@ -102,6 +105,7 @@ impl Config {
         Ok(Some(Self {
             default_model: "local".to_string(),
             max_turns: 50,
+            context_window: 32_768,
             sandbox_network,
             fs_read_deny,
             fs_protected,

@@ -104,6 +104,7 @@ async fn bc_2_2_edit_unique_match_changes_file() {
         barry_core::config::Config {
             default_model: "test".to_string(),
             max_turns: 10,
+            context_window: 32_768,
             sandbox_network: true,
             fs_read_deny: vec![],
             fs_protected: vec![],
@@ -151,6 +152,7 @@ async fn bc_2_2_edit_non_unique_no_change() {
         barry_core::config::Config {
             default_model: "test".to_string(),
             max_turns: 10,
+            context_window: 32_768,
             sandbox_network: true,
             fs_read_deny: vec![],
             fs_protected: vec![],

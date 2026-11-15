@@ -115,6 +115,7 @@ async fn bc_3_7_read_deny_blocks_secret_and_allows_normal_outside_read() {
         Config {
             default_model: "test".to_string(),
             max_turns: 10,
+            context_window: 32_768,
             sandbox_network: true,
             fs_read_deny: vec![],
             fs_protected: vec![],
@@ -170,6 +171,7 @@ async fn bc_3_7_read_deny_blocks_secret_and_allows_normal_outside_read() {
         Config {
             default_model: "test".to_string(),
             max_turns: 10,
+            context_window: 32_768,
             sandbox_network: true,
             fs_read_deny: vec![],
             fs_protected: vec![],

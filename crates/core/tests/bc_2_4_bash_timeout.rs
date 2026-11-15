@@ -98,6 +98,7 @@ async fn bc_2_4_bash_timeout_kills_children() {
         barry_core::config::Config {
             default_model: "test".to_string(),
             max_turns: 10,
+            context_window: 32_768,
             sandbox_network: true,
             fs_read_deny: vec![],
             fs_protected: vec![],
@@ -162,6 +163,7 @@ async fn run_sleep_with_timeout(timeout_secs: u64) -> Vec<Event> {
         barry_core::config::Config {
             default_model: "test".to_string(),
             max_turns: 10,
+            context_window: 32_768,
             sandbox_network: true,
             fs_read_deny: vec![],
             fs_protected: vec![],

@@ -114,6 +114,7 @@ async fn bc_2_1_read_tool_returns_numbered_contents() {
         barry_core::config::Config {
             default_model: "test".to_string(),
             max_turns: 10,
+            context_window: 32_768,
             sandbox_network: true,
             fs_read_deny: vec![],
             fs_protected: vec![],

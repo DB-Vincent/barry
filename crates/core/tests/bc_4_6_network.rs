@@ -19,6 +19,7 @@ fn config(network: bool) -> Config {
     Config {
         default_model: "test".to_string(),
         max_turns: 10,
+        context_window: 32_768,
         sandbox_network: network,
         fs_read_deny: vec![],
         fs_protected: vec![],

@@ -103,6 +103,7 @@ async fn tool_result_content(name: &str, arguments: serde_json::Value) -> String
         Config {
             default_model: "test".to_string(),
             max_turns: 10,
+            context_window: 32_768,
             sandbox_network: true,
             fs_read_deny: vec![],
             fs_protected: vec![],
