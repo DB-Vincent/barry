@@ -50,10 +50,41 @@ Options:
 | `--json` | Emit each event as one JSONL line instead of pretty output |
 | `--model <name>` | Override the model id sent to the provider |
 | `--resume <file\|prefix>` | Continue a session from its log file, or a timestamp/UUID prefix in the default session directory |
+| `--approval-file <file>` | Approve only the actions listed in a TOML file; deny everything else that needs approval |
 
 Exit codes: `0` on success, `1` on error/aborted, `2` on config error, `3` on turn limit.
 
 Headless mode never prompts for approval: an action that needs approval is denied, and the model is told that approval is unavailable in headless mode.
+
+#### Scoped approvals for autonomous runs
+
+`--approval-file` lets a headless run approve a fixed list of actions. The default is deny: anything not listed is refused, an empty file approves nothing, and there is no allow-all setting. A typo or unknown key is a config error (exit 2).
+
+```toml
+[[allow]]
+id = "build"              # optional; appears in the audit log
+tool = "bash"
+command = "cargo build"   # the whole command, word for word
+
+[[allow]]
+tool = "bash"
+command = "cargo test"
+allow_extra_args = true   # also allow plain extra words, e.g. `cargo test -p core`
+
+[[allow]]
+tool = "write"            # or "edit"
+path_under = "/tmp/out"   # relative paths resolve against the cwd
+```
+
+Rules only apply to actions that would otherwise need approval, so deny rules, read-deny paths and the sandbox still apply. Further limits:
+
+- A bash command matches only if it is plain words. Quotes, `$`, backticks, `;`, `&`, `|`, `<`, `>` and globs never match, so `cargo test; rm x` is not covered by a `cargo test` rule.
+- Paths are canonicalised before matching; `..` and symlinks that leave the rule's directory do not match.
+- A path with a protected component (see `fs.protected`) is never approved.
+- A request to widen the sandbox after a blocked command is never approved.
+- An approval covers one action. Unlike an interactive approval it does not grant a command prefix or a directory for the rest of the session.
+
+Approved actions are logged with `decided_by` set to `rule:approval-file:<id>`.
 
 ### Other commands
 

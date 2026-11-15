@@ -83,6 +83,15 @@ fn record_decision(
         .map_err(|err| CoreError::Session(err.to_string()))
 }
 
+/// What the model is told when an approval is refused. A user refusal keeps
+/// its familiar wording; anything else was refused by an approval policy.
+fn denial_message(source: &DecidedBy) -> &'static str {
+    match source {
+        DecidedBy::User => "denied by user",
+        _ => "denied: not covered by the approval policy",
+    }
+}
+
 /// Record a directory grant as soon as the user approves it.
 fn record_grant(log: &mut Option<&mut SessionLog>, dir: &Path) -> Result<(), CoreError> {
     let Some(session) = log.as_mut() else {
@@ -307,30 +316,40 @@ pub(crate) async fn execute_tool(
                         summary: format!("bash: {command}"),
                         reason: reason.clone(),
                         grant_path: None,
+                        command: Some(command.to_string()),
+                        path: None,
                     };
-                    match approver.decide(&req).await {
+                    let (choice, source) = approver.decide_attributed(&req).await;
+                    match choice {
                         ApprovalChoice::Deny => {
+                            let message = denial_message(&source);
                             record_decision(
                                 &mut log,
                                 call,
                                 &Decision::Deny {
-                                    reason: "denied by user".to_string(),
+                                    reason: message.to_string(),
                                 },
-                                &DecidedBy::User,
+                                &source,
                             )?;
                             Ok(ToolResult::new(
                                 false,
-                                "denied by user".to_string(),
-                                "denied by user".to_string(),
+                                message.to_string(),
+                                message.to_string(),
                             ))
                         }
                         ApprovalChoice::Once | ApprovalChoice::AlwaysThisSession => {
-                            // Grant the first word of the command as a session prefix.
-                            let prefix = command.split_whitespace().next().map(str::to_string);
+                            // A user approval grants the first word of the command as
+                            // a session prefix. A rule approval covers this command
+                            // only, so it never widens what later commands may do.
+                            let prefix = command
+                                .split_whitespace()
+                                .next()
+                                .map(str::to_string)
+                                .filter(|_| source == DecidedBy::User);
                             if let Some(first_word) = &prefix {
                                 policy.approve_prefix(first_word);
                             }
-                            record_decision(&mut log, call, &Decision::Allow, &DecidedBy::User)?;
+                            record_decision(&mut log, call, &Decision::Allow, &source)?;
                             if let Some(prefix) = &prefix {
                                 record_prefix(&mut log, prefix)?;
                             }
@@ -568,20 +587,23 @@ async fn check_write_approval(
                 summary: format!("{tool} to {path}"),
                 reason,
                 grant_path: grant_dir,
+                command: None,
+                path: Some(PathBuf::from(path)),
             };
-            let choice = approver.decide(&req).await;
+            let (choice, source) = approver.decide_attributed(&req).await;
             match choice {
                 ApprovalChoice::Deny => Ok(WriteDecision {
                     allowed: false,
                     decision: Decision::Deny {
-                        reason: "denied by user".to_string(),
+                        reason: denial_message(&source).to_string(),
                     },
-                    decided_by: DecidedBy::User,
+                    decided_by: source,
                     grant: None,
                 }),
                 ApprovalChoice::Once | ApprovalChoice::AlwaysThisSession => {
+                    // Only a user approval widens the session to the directory.
                     let mut granted = None;
-                    if let Some(dir) = grant_path {
+                    if let Some(dir) = grant_path.filter(|_| source == DecidedBy::User) {
                         if policy.grant_dir(&dir).is_ok() {
                             granted = Some(dir);
                         }
@@ -589,7 +611,7 @@ async fn check_write_approval(
                     Ok(WriteDecision {
                         allowed: true,
                         decision: Decision::Allow,
-                        decided_by: DecidedBy::User,
+                        decided_by: source,
                         grant: granted,
                     })
                 }
@@ -625,10 +647,11 @@ async fn execute_write_with_approval(
     if decision.allowed {
         execute_write(path, content).await
     } else {
+        let message = denial_message(&decision.decided_by);
         Ok(ToolResult::new(
             false,
-            "denied by user".to_string(),
-            "denied by user".to_string(),
+            message.to_string(),
+            message.to_string(),
         ))
     }
 }
@@ -664,10 +687,11 @@ async fn execute_edit_with_approval(
     if decision.allowed {
         execute_edit(path, old_string, new_string).await
     } else {
+        let message = denial_message(&decision.decided_by);
         Ok(ToolResult::new(
             false,
-            "denied by user".to_string(),
-            "denied by user".to_string(),
+            message.to_string(),
+            message.to_string(),
         ))
     }
 }
@@ -864,6 +888,8 @@ async fn run_sandboxed_with_retry(
         summary: format!("bash: {command}"),
         reason: "sandbox blocked the command".to_string(),
         grant_path: Some(target_dir.clone()),
+        command: Some(command.to_string()),
+        path: None,
     };
 
     match approver.decide(&req).await {

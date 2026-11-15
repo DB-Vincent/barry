@@ -5,9 +5,10 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use barry_protocol::{ApprovalChoice, ApprovalRequest};
+use barry_protocol::{ApprovalChoice, ApprovalRequest, DecidedBy};
 
 pub mod agent;
+pub mod approval_file;
 pub mod config;
 pub mod context;
 pub mod hooks;
@@ -38,4 +39,16 @@ pub enum CoreError {
 /// An approval decision callback.
 pub trait Approver: Send + Sync {
     fn decide(&self, req: &ApprovalRequest) -> BoxFuture<'_, ApprovalChoice>;
+
+    /// Like [`Approver::decide`], and says who decided, for the audit log.
+    /// The default attributes the decision to the user. An approver driven by
+    /// rules overrides this so the log shows the rule, and so the agent does
+    /// not turn a one-off approval into a wider session grant.
+    fn decide_attributed(
+        &self,
+        req: &ApprovalRequest,
+    ) -> BoxFuture<'_, (ApprovalChoice, DecidedBy)> {
+        let decision = self.decide(req);
+        Box::pin(async move { (decision.await, DecidedBy::User) })
+    }
 }
