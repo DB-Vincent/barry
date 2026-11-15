@@ -1,7 +1,9 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
+use barry_core::Agent;
 /// BC-4.6 With `network = true`, bash can reach a local HTTP server. With
 /// `network = false` it cannot.
 use barry_core::config::Config;
-use barry_core::Agent;
 use barry_llm::LlmRequest;
 use barry_policy::{Policy, PolicyConfig};
 use barry_protocol::{ApprovalChoice, Message, StopReason};
@@ -21,9 +23,13 @@ fn config(network: bool) -> Config {
         max_turns: 10,
         context_window: 32_768,
         sandbox_network: network,
+        sandbox_unsandboxed: false,
+        redact_tool_output: false,
         fs_read_deny: vec![],
         fs_protected: vec![],
+        rules: vec![],
         hooks: vec![],
+        budgets: barry_core::budget::Budgets::default(),
     }
 }
 
@@ -93,7 +99,7 @@ async fn run(ws: &Workspace, network: bool, port: u16) -> (bool, String) {
         config(network),
         provider.clone(),
         approver,
-        Some(policy(ws, network)),
+        policy(ws, network),
     )
     .expect("agent constructs");
     let (tx, _rx) = mpsc::channel(32);

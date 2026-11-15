@@ -94,16 +94,17 @@ fn plain_words(command: &str) -> Option<Vec<&str>> {
         return None;
     }
     let words: Vec<&str> = command.split_whitespace().collect();
-    if words.is_empty() {
-        None
-    } else {
-        Some(words)
-    }
+    if words.is_empty() { None } else { Some(words) }
 }
 
 impl PolicyFileApprover {
     /// Parse a policy file. `cwd` anchors relative `path_under` entries and
     /// `protected` lists path components that are never approved.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::Config`] if the file is not valid TOML, has an
+    /// unknown key, or contains a malformed rule.
     pub fn from_toml(
         source: &str,
         label: &str,
@@ -162,7 +163,7 @@ impl PolicyFileApprover {
                     return Err(bad(
                         index,
                         &format!("unknown tool {other:?} (expected bash, write or edit)"),
-                    ))
+                    ));
                 }
             };
             rules.push(Rule { id, matcher });
@@ -176,6 +177,10 @@ impl PolicyFileApprover {
     }
 
     /// Read and parse a policy file.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError`] if the file cannot be read or parsed.
     pub fn from_file(path: &Path, cwd: &Path, protected: Vec<String>) -> Result<Self, CoreError> {
         let source = std::fs::read_to_string(path).map_err(|err| {
             CoreError::Config(format!(
@@ -311,32 +316,39 @@ mod tests {
     #[test]
     fn bash_rule_matches_the_exact_command_only() {
         let a = approver("[[allow]]\ntool='bash'\ncommand='cargo build'\n");
-        assert!(a
-            .matching_rule(&req("bash", Some("cargo build"), None))
-            .is_some());
-        assert!(a
-            .matching_rule(&req("bash", Some("cargo   build"), None))
-            .is_some());
-        assert!(a
-            .matching_rule(&req("bash", Some("cargo build --release"), None))
-            .is_none());
-        assert!(a
-            .matching_rule(&req("bash", Some("cargo build; rm x"), None))
-            .is_none());
-        assert!(a
-            .matching_rule(&req("bash", Some("cargo buildx"), None))
-            .is_none());
+        assert!(
+            a.matching_rule(&req("bash", Some("cargo build"), None))
+                .is_some()
+        );
+        assert!(
+            a.matching_rule(&req("bash", Some("cargo   build"), None))
+                .is_some()
+        );
+        assert!(
+            a.matching_rule(&req("bash", Some("cargo build --release"), None))
+                .is_none()
+        );
+        assert!(
+            a.matching_rule(&req("bash", Some("cargo build; rm x"), None))
+                .is_none()
+        );
+        assert!(
+            a.matching_rule(&req("bash", Some("cargo buildx"), None))
+                .is_none()
+        );
     }
 
     #[test]
     fn extra_args_are_opt_in() {
         let a = approver("[[allow]]\ntool='bash'\ncommand='cargo test'\nallow_extra_args=true\n");
-        assert!(a
-            .matching_rule(&req("bash", Some("cargo test -p core"), None))
-            .is_some());
-        assert!(a
-            .matching_rule(&req("bash", Some("cargo test && x"), None))
-            .is_none());
+        assert!(
+            a.matching_rule(&req("bash", Some("cargo test -p core"), None))
+                .is_some()
+        );
+        assert!(
+            a.matching_rule(&req("bash", Some("cargo test && x"), None))
+                .is_none()
+        );
         assert!(a.matching_rule(&req("bash", Some("cargo"), None)).is_none());
     }
 
@@ -351,32 +363,39 @@ mod tests {
     #[test]
     fn write_rule_needs_the_path_inside_the_root_and_the_right_tool() {
         let a = approver("[[allow]]\ntool='write'\npath_under='/work/out'\n");
-        assert!(a
-            .matching_rule(&req("write", None, Some("out/a.txt")))
-            .is_some());
-        assert!(a
-            .matching_rule(&req("write", None, Some("/work/out/x/a.txt")))
-            .is_some());
-        assert!(a
-            .matching_rule(&req("edit", None, Some("out/a.txt")))
-            .is_none());
-        assert!(a
-            .matching_rule(&req("write", None, Some("src/a.txt")))
-            .is_none());
-        assert!(a
-            .matching_rule(&req("write", None, Some("out/../src/a.txt")))
-            .is_none());
+        assert!(
+            a.matching_rule(&req("write", None, Some("out/a.txt")))
+                .is_some()
+        );
+        assert!(
+            a.matching_rule(&req("write", None, Some("/work/out/x/a.txt")))
+                .is_some()
+        );
+        assert!(
+            a.matching_rule(&req("edit", None, Some("out/a.txt")))
+                .is_none()
+        );
+        assert!(
+            a.matching_rule(&req("write", None, Some("src/a.txt")))
+                .is_none()
+        );
+        assert!(
+            a.matching_rule(&req("write", None, Some("out/../src/a.txt")))
+                .is_none()
+        );
     }
 
     #[test]
     fn protected_components_are_never_approved() {
         let a = approver("[[allow]]\ntool='write'\npath_under='/work'\n");
-        assert!(a
-            .matching_rule(&req("write", None, Some(".git/config")))
-            .is_none());
-        assert!(a
-            .matching_rule(&req("write", None, Some("a/.git/hooks/x")))
-            .is_none());
+        assert!(
+            a.matching_rule(&req("write", None, Some(".git/config")))
+                .is_none()
+        );
+        assert!(
+            a.matching_rule(&req("write", None, Some("a/.git/hooks/x")))
+                .is_none()
+        );
     }
 
     #[test]

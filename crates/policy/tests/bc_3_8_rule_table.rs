@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-3.8 Rule table: each command maps to the expected decision.
 use barry_policy::{Decision, Policy, PolicyConfig};
 
@@ -18,7 +20,7 @@ macro_rules! rule_case {
         #[test]
         fn $name() {
             let policy = Policy::new(config()).unwrap();
-            let (decision, _rule_id) = policy.check_bash($cmd);
+            let (decision, _rule_id) = policy.check_bash($cmd, &barry_policy::SessionGrants::new());
             assert!(
                 matches!(decision, $expected),
                 "command {:?} should match {:?}, got {:?}",

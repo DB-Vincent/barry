@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// A headless run with `--approval-file` approves only what the file lists.
 /// Everything else stays denied, and the audit log names the rule.
 use barry_testkit::{FakeLlm, Reply};
