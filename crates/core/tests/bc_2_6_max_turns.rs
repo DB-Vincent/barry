@@ -82,6 +82,7 @@ async fn bc_2_6_turn_limit_emits_notice_and_stops() {
             max_turns: 2,
             context_window: 32_768,
             sandbox_network: true,
+            redact_tool_output: false,
             fs_read_deny: vec![],
             fs_protected: vec![],
             rules: vec![],

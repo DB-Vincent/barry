@@ -120,6 +120,7 @@ async fn bc_2_11_tool_list_is_exact_and_prompt_matches_snapshot() {
                 max_turns: 10,
                 context_window: 32_768,
                 sandbox_network: true,
+                redact_tool_output: false,
                 fs_read_deny: vec![],
                 fs_protected: vec![],
                 rules: vec![],

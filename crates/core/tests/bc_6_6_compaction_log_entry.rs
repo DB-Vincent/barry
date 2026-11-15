@@ -88,6 +88,7 @@ async fn bc_6_6_compaction_writes_a_compaction_log_entry() {
         max_turns: 50,
         context_window: 30_000,
         sandbox_network: true,
+        redact_tool_output: false,
         fs_read_deny: vec![],
         fs_protected: vec![],
         rules: vec![],

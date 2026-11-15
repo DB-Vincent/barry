@@ -106,6 +106,7 @@ async fn bc_3_5_dangling_symlink_write_does_not_escape_cwd() {
             max_turns: 10,
             context_window: 32_768,
             sandbox_network: true,
+            redact_tool_output: false,
             fs_read_deny: vec![],
             fs_protected: vec![],
             rules: vec![],

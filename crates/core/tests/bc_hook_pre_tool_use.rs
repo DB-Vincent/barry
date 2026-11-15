@@ -83,6 +83,7 @@ fn config_with_hooks(hooks: Vec<HookConfig>) -> Config {
         max_turns: 50,
         context_window: 20_000,
         sandbox_network: true,
+        redact_tool_output: false,
         fs_read_deny: vec![],
         fs_protected: vec![],
         rules: vec![],

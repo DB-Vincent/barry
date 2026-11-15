@@ -71,6 +71,7 @@ async fn bc_6_4_a_context_that_cannot_shrink_ends_the_turn() {
             max_turns: 50,
             context_window: 20_000,
             sandbox_network: true,
+            redact_tool_output: false,
             fs_read_deny: vec![],
             fs_protected: vec![],
             rules: vec![],

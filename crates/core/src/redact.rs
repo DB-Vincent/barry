@@ -1,7 +1,10 @@
-//! Secret redaction for the session log (PLAN 6.7).
+//! Secret redaction for the session log (PLAN 6.7), and optionally for tool
+//! output on its way to the model (#17).
 //!
-//! Redaction applies **only** to the audit log. The model still receives the
-//! real tool output.
+//! The session log is always redacted. What the model receives is redacted
+//! only when `redaction.tool_output = true` is set in the config: BC-5.3 wires
+//! the model to the real tool output, and a local provider has nowhere for a
+//! secret to leak to. With a remote provider, turn it on.
 
 use std::sync::LazyLock;
 

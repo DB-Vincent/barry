@@ -120,6 +120,7 @@ async fn bc_3_3_grant_persists_in_session_same_dir_different_dir_asks() {
             max_turns: 10,
             context_window: 32_768,
             sandbox_network: true,
+            redact_tool_output: false,
             fs_read_deny: vec![],
             fs_protected: vec![],
             rules: vec![],
