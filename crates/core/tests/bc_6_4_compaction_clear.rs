@@ -85,6 +85,7 @@ fn config_with_window(window: u64) -> barry_core::config::Config {
         sandbox_network: true,
         fs_read_deny: vec![],
         fs_protected: vec![],
+        rules: vec![],
         hooks: vec![],
     }
 }

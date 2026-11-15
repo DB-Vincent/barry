@@ -119,6 +119,7 @@ async fn bc_2_11_tool_list_is_exact_and_prompt_matches_snapshot() {
                 sandbox_network: true,
                 fs_read_deny: vec![],
                 fs_protected: vec![],
+                rules: vec![],
                 hooks: vec![],
             },
             provider.clone(),

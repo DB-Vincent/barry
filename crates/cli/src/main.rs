@@ -134,7 +134,7 @@ async fn main() -> ExitCode {
     let cli = Cli::parse();
 
     if let Some(command) = cli.command {
-        return run_command(command);
+        return run_command(command, &cfg);
     }
 
     let Some(prompt) = cli.prompt else {
@@ -144,7 +144,7 @@ async fn main() -> ExitCode {
     run_headless(cfg, prompt, cli.json, cli.model, cli.resume).await
 }
 
-fn run_command(command: Commands) -> ExitCode {
+fn run_command(command: Commands, cfg: &Config) -> ExitCode {
     match command {
         Commands::Log { command } => match command {
             LogCommands::Verify { file } => match session::verify(&file) {
@@ -166,16 +166,16 @@ fn run_command(command: Commands) -> ExitCode {
         },
         Commands::Rules { command } => match command {
             Some(RulesCommands::Check { command }) => {
-                let cfg = barry_policy::PolicyConfig {
+                let policy_cfg = barry_policy::PolicyConfig {
                     cwd: std::env::current_dir().unwrap_or_default(),
                     home: std::env::var("HOME").map(PathBuf::from).unwrap_or_default(),
                     extra_writable: vec![],
-                    read_deny: vec![],
-                    protected: vec![],
-                    rules: vec![],
-                    network: true,
+                    read_deny: cfg.fs_read_deny.clone(),
+                    protected: cfg.fs_protected.clone(),
+                    rules: cfg.rules.clone(),
+                    network: cfg.sandbox_network,
                 };
-                let policy = barry_policy::Policy::new(cfg).expect("policy");
+                let policy = barry_policy::Policy::new(policy_cfg).expect("policy");
                 let (decision, rule_id) = policy.check_bash(&command);
                 match decision {
                     barry_protocol::Decision::Allow => {
@@ -243,7 +243,7 @@ async fn run_headless(
         extra_writable: vec![],
         read_deny: cfg.fs_read_deny.clone(),
         protected: cfg.fs_protected.clone(),
-        rules: vec![],
+        rules: cfg.rules.clone(),
         network: cfg.sandbox_network,
     })
     .expect("policy constructs");

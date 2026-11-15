@@ -105,6 +105,7 @@ async fn agent_tool_is_advertised_and_honestly_unavailable() {
             sandbox_network: true,
             fs_read_deny: vec![],
             fs_protected: vec![],
+            rules: vec![],
             hooks: vec![],
         },
         provider.clone(),

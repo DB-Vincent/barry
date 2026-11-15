@@ -85,6 +85,7 @@ fn config_with_hooks(hooks: Vec<HookConfig>) -> Config {
         sandbox_network: true,
         fs_read_deny: vec![],
         fs_protected: vec![],
+        rules: vec![],
         hooks,
     }
 }

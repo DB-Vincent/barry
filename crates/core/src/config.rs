@@ -2,6 +2,8 @@
 
 use std::path::Path;
 
+use barry_policy::BashRule;
+use barry_protocol::Decision;
 use thiserror::Error;
 
 /// Errors from config loading.
@@ -17,6 +19,8 @@ pub enum ConfigError {
         path: String,
         source: std::io::Error,
     },
+    #[error("config error in {path}: {message}")]
+    Invalid { path: String, message: String },
 }
 
 /// User configuration.
@@ -34,6 +38,8 @@ pub struct Config {
     /// Filesystem: path components that always require approval (e.g. `.git`,
     /// `.barry`, `.env`).
     pub fs_protected: Vec<String>,
+    /// Bash rules (`[[rule]]`), applied after the built-in defaults.
+    pub rules: Vec<BashRule>,
     /// Hooks run around tool execution (PLAN 6.5).
     pub hooks: Vec<HookConfig>,
 }
@@ -61,6 +67,7 @@ impl Default for Config {
             sandbox_network: true,
             fs_read_deny: vec![],
             fs_protected: vec![],
+            rules: vec![],
             hooks: vec![],
         }
     }
@@ -119,6 +126,8 @@ impl Config {
             })
             .unwrap_or_default();
 
+        let rules = parse_rules(path, &value)?;
+
         let hooks: Vec<HookConfig> = value
             .get("hooks")
             .and_then(|h| h.get("PreToolUse"))
@@ -171,7 +180,65 @@ impl Config {
             sandbox_network,
             fs_read_deny,
             fs_protected,
+            rules,
             hooks,
         }))
     }
+}
+
+/// Parse the `[[rule]]` array: `{ id, match, decision }`.
+///
+/// A malformed rule is a config error, not a silently skipped entry: a rule
+/// the user believes is protecting them must never be dropped.
+fn parse_rules(path: &Path, value: &toml::Value) -> Result<Vec<BashRule>, ConfigError> {
+    let Some(entries) = value.get("rule").and_then(|r| r.as_array()) else {
+        return Ok(Vec::new());
+    };
+
+    let mut rules = Vec::with_capacity(entries.len());
+    for (index, entry) in entries.iter().enumerate() {
+        let invalid = |message: String| ConfigError::Invalid {
+            path: path.display().to_string(),
+            message,
+        };
+
+        let id = entry
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let pattern = entry
+            .get("match")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if id.is_empty() || pattern.is_empty() {
+            return Err(invalid(format!(
+                "rule {index}: both `id` and `match` are required"
+            )));
+        }
+
+        let decision = match entry.get("decision").and_then(|v| v.as_str()) {
+            Some("allow") => Decision::Allow,
+            Some("deny") => Decision::Deny {
+                reason: format!("rule {id} denies this command"),
+            },
+            Some("ask") => Decision::Ask {
+                reason: format!("rule {id} requires approval"),
+            },
+            Some(other) => {
+                return Err(invalid(format!(
+                    "rule {id}: unknown decision {other:?} (expected allow, ask or deny)"
+                )))
+            }
+            None => return Err(invalid(format!("rule {id}: `decision` is required"))),
+        };
+
+        rules.push(BashRule {
+            id,
+            r#match: pattern,
+            decision,
+        });
+    }
+    Ok(rules)
 }

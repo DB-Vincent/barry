@@ -107,6 +107,7 @@ async fn bc_2_5_large_output_is_truncated() {
             sandbox_network: true,
             fs_read_deny: vec![],
             fs_protected: vec![],
+            rules: vec![],
             hooks: vec![],
         },
         provider.clone(),

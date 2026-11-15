@@ -120,6 +120,7 @@ async fn bc_2_7_three_results_in_call_order_when_one_fails() {
             sandbox_network: true,
             fs_read_deny: vec![],
             fs_protected: vec![],
+            rules: vec![],
             hooks: vec![],
         },
         provider.clone(),

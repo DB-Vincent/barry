@@ -118,6 +118,7 @@ async fn bc_2_1_read_tool_returns_numbered_contents() {
             sandbox_network: true,
             fs_read_deny: vec![],
             fs_protected: vec![],
+            rules: vec![],
             hooks: vec![],
         },
         provider.clone(),
