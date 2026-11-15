@@ -18,12 +18,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # No toolchain input: the action installs the version pinned in
+      # rust-toolchain.toml (#40), so CI and local runs agree.
       - name: Install toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: stable
-          profile: minimal
-          components: rustfmt, clippy
 
       - name: Install bubblewrap (Linux)
         if: matrix.os == 'ubuntu-latest'
