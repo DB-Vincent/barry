@@ -1,7 +1,5 @@
 //! The `barry` binary: entry point, headless mode and the REPL.
 
-#![forbid(unsafe_code)]
-
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -175,6 +173,10 @@ fn run_command(command: Commands) -> ExitCode {
                     rules: vec![],
                     network: true,
                 };
+                #[allow(
+                    clippy::expect_used,
+                    reason = "static config, construction cannot fail"
+                )]
                 let policy = barry_policy::Policy::new(cfg).expect("policy");
                 let (decision, rule_id) = policy.check_bash(&command);
                 match decision {
@@ -237,6 +239,10 @@ async fn run_headless(
 
     // Build the sandbox policy from config. Headless mode never trusts
     // project config, so only defaults + config file values apply.
+    #[allow(
+        clippy::expect_used,
+        reason = "startup invariant, the process cannot run without a policy"
+    )]
     let policy = Policy::new(barry_policy::PolicyConfig {
         cwd: std::env::current_dir().unwrap_or_default(),
         home: std::env::var("HOME").map(PathBuf::from).unwrap_or_default(),

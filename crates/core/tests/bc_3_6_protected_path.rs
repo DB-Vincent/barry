@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-3.6 Writing `.git/hooks/pre-commit` inside cwd asks for approval.
 ///
 /// Protected path components (e.g. `.git`) always trigger Ask, even for

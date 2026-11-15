@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-2.12 `barry` with no `-p` starts a line REPL in cwd: a prompt streams
 /// the answer to stdout, and `/exit` exits 0.
 ///

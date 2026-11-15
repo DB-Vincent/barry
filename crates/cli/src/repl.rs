@@ -39,12 +39,14 @@ impl ReplApprover {
         }
     }
 
+    #[allow(clippy::expect_used, reason = "a poisoned lock is unrecoverable")]
     fn set_cancel(&self, cancel: &CancellationToken) {
         *self.cancel.lock().expect("approval lock") = cancel.clone();
     }
 }
 
 impl Approver for ReplApprover {
+    #[allow(clippy::expect_used, reason = "a poisoned lock is unrecoverable")]
     fn decide(&self, req: &ApprovalRequest) -> BoxFuture<'_, ApprovalChoice> {
         let cancel = self.cancel.lock().expect("approval lock").clone();
         let input = self.input.clone();
@@ -167,6 +169,10 @@ pub(crate) async fn run(
         }
     };
 
+    #[allow(
+        clippy::expect_used,
+        reason = "startup invariant, the process cannot run without a policy"
+    )]
     let policy = Policy::new(barry_policy::PolicyConfig {
         cwd: std::env::current_dir().unwrap_or_default(),
         home: std::env::var("HOME").map(PathBuf::from).unwrap_or_default(),

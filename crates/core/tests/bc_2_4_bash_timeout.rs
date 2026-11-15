@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-2.4 A bash command that runs past its timeout is killed, including
 /// background children; the model is told it timed out; no process remains.
 use barry_core::{Agent, Approver, BoxFuture};

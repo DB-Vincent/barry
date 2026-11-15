@@ -36,6 +36,7 @@ impl Redactor {
 
     /// Build a redactor with explicit literal values (tests, custom setups).
     pub fn new(mut literals: Vec<String>) -> Self {
+        #[allow(clippy::expect_used, reason = "patterns are compile-time literals")]
         let patterns = [
             r"sk-[A-Za-z0-9_-]{20,}",
             r"gh[pousr]_[A-Za-z0-9]{36,}",

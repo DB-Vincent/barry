@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-1.7 When `api_key_env` is set, the request carries
 /// `Authorization: Bearer <key>`. When unset, no Authorization header.
 use barry_llm::{Compat, LlmError, LlmEvent, LlmRequest, OpenAiProvider, Provider};

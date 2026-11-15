@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-3.4 A grant does not carry over to a new session.
 ///
 /// A fresh Agent (new Policy) re-asks for the same outside directory,

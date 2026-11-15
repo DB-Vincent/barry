@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// PLAN 5 (tool result wrapping) and 5.1 (bash returns exit_code, stdout and
 /// stderr). Neither has its own BC number, so this pins both shapes:
 ///

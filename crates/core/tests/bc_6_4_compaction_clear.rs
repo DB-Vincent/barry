@@ -1,6 +1,8 @@
 //! BC-6.4 / 6.5 Compaction: when the context estimate passes the threshold,
 //! old tool outputs are cleared first; if that is not enough, a summary is
 //! requested and the old messages are replaced.
+
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use barry_core::{Agent, Approver, BoxFuture};
 use barry_llm::{LlmEvent, LlmRequest, Provider};
 use barry_protocol::{ApprovalChoice, ApprovalRequest, Message, StopReason, ToolCall};

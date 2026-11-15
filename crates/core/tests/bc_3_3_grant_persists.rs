@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-3.3 If the user approves, the file is written. A second write to the
 /// same directory does not ask. A write to a different outside directory
 /// asks again.

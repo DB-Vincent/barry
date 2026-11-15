@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-2.7 Given three tool calls in one reply where one fails internally, the
 /// next request carries exactly three tool results, in call order.
 use barry_core::config::Config;

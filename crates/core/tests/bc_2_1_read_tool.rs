@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-2.1 Given the model calls `read` on `README.md`,
 /// when the agent runs the turn, then the model receives the file
 /// contents with line numbers and the user sees the final answer.

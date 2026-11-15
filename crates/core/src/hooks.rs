@@ -117,6 +117,10 @@ impl Hook {
             .spawn()
             .map_err(|e| CoreError::Config(format!("failed to spawn hook: {e}")))?;
         {
+            #[allow(
+                clippy::expect_used,
+                reason = "stdin is piped when the command is built"
+            )]
             let mut stdin = child.stdin.take().expect("stdin open");
             use tokio::io::AsyncWriteExt;
             let _ = stdin.write_all(input_json.as_bytes()).await;

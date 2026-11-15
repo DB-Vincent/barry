@@ -1,4 +1,6 @@
 //! BC-6.2 Instructions over 32 KiB are cut and marked `[truncated]`.
+
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use barry_core::context::instructions::instructions_section;
 use std::sync::Mutex;
 

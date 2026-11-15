@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-2.5 Output larger than 30,000 bytes reaches the model as head + tail
 /// with a truncation marker stating the original size.
 use barry_core::{Agent, Approver, BoxFuture};

@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-3.9 After "always this session" on a bash command, the same command
 /// prefix runs without asking in the same session. A new session asks again.
 use barry_core::config::Config;

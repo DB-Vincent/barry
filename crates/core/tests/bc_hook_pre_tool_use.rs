@@ -1,5 +1,7 @@
 //! Hooks (PLAN 6.5): a PreToolUse hook that exits 2 blocks the tool; a hook
 //! returning deny JSON also blocks; an allowing hook lets the policy decide.
+
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use barry_core::config::{Config, HookConfig};
 use barry_core::{Agent, Approver, BoxFuture};
 use barry_llm::{LlmEvent, LlmRequest, Provider};

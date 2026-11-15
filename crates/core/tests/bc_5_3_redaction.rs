@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-5.3 When a tool reads a file containing `sk-` followed by 30 chars, or
 /// `FAKE` env secret values, the log shows `[REDACTED]`, never the secret.
 /// The model still receives the real content.
