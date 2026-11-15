@@ -1,8 +1,7 @@
 //! BC-6.2 Instructions over 32 KiB are cut and marked `[truncated]`.
 use barry_core::context::instructions::instructions_section;
-use std::sync::Mutex;
 
-static HOME_LOCK: Mutex<()> = Mutex::new(());
+use crate::HOME_LOCK;
 
 fn with_home<F: FnOnce() -> R, R>(home: &tempfile::TempDir, f: F) -> R {
     let _guard = HOME_LOCK.lock().unwrap();
