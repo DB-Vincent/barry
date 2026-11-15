@@ -1,5 +1,5 @@
 //! Test utilities for barry.
-//! Provides Workspace, ScriptedProvider, ScriptedApprover, FakeLlm.
+//! Provides `Workspace`, `ScriptedProvider`, `ScriptedApprover`, `FakeLlm`.
 
 #![forbid(unsafe_code)]
 

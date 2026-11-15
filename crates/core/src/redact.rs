@@ -35,6 +35,11 @@ impl Redactor {
     }
 
     /// Build a redactor with explicit literal values (tests, custom setups).
+    ///
+    /// # Panics
+    ///
+    /// Never panics in practice: the built-in patterns are valid regular
+    /// expressions.
     pub fn new(mut literals: Vec<String>) -> Self {
         let patterns = [
             r"sk-[A-Za-z0-9_-]{20,}",

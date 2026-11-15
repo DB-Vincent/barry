@@ -1,4 +1,4 @@
-/// BC-2.6 A model that keeps calling tools stops after max_turns, and the
+/// BC-2.6 A model that keeps calling tools stops after `max_turns`, and the
 /// user gets a "turn limit reached" notice.
 use barry_core::config::Config;
 use barry_core::{Agent, Approver, BoxFuture};
@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
 
 /// Replays a fixed number of tool-calling replies, then panics. If the loop
-/// goes past max_turns the test fails loudly instead of hanging.
+/// goes past `max_turns` the test fails loudly instead of hanging.
 struct AlwaysToolProvider {
     calls: Mutex<usize>,
     requests: Mutex<Vec<LlmRequest>>,

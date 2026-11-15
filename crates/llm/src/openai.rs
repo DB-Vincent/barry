@@ -41,6 +41,11 @@ impl OpenAiProvider {
     /// - `api_key_env`: name of the env var holding the key, or `None`
     /// - `max_output_tokens`: value of `max_tokens` in the request body
     /// - `compat`: provider quirks (reasoning field, parallel tools, stream usage)
+    ///
+    /// # Panics
+    ///
+    /// Panics if the HTTP client cannot be built (for example when the TLS
+    /// backend fails to initialise).
     pub fn new(
         model: String,
         base_url: Url,
@@ -224,7 +229,7 @@ fn chat_completions_url(base_url: &Url) -> Result<Url, LlmError> {
         })
 }
 
-/// Map protocol messages to the OpenAI wire format.
+/// Map protocol messages to the `OpenAI` wire format.
 fn build_messages(messages: &[Message]) -> Vec<Value> {
     messages
         .iter()

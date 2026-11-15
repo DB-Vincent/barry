@@ -79,6 +79,12 @@ pub(crate) fn sandbox_env() -> Vec<(String, String)> {
 /// On Linux this assembles a `bwrap` invocation that re-executes the barry
 /// binary as `__sandbox-exec`. On macOS it assembles a `sandbox-exec`
 /// invocation.
+///
+/// # Errors
+///
+/// Returns [`SandboxError::BwrapUnavailable`] if `bwrap` is missing on Linux,
+/// and [`SandboxError::Other`] if the helper cannot be prepared or the
+/// platform has no sandbox support.
 pub fn command(
     spec: &SandboxSpec,
     shell_command: &str,

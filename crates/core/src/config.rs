@@ -69,6 +69,11 @@ impl Default for Config {
 impl Config {
     /// Load user config from `$BARRY_CONFIG`.
     /// Returns `Ok(None)` if `BARRY_CONFIG` is not set (defaults apply).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::Io`] if the file cannot be read and
+    /// [`ConfigError::Toml`] if it is not valid TOML.
     pub fn load() -> Result<Option<Self>, ConfigError> {
         let Ok(path) = std::env::var("BARRY_CONFIG") else {
             return Ok(None);

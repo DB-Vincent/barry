@@ -46,11 +46,16 @@ pub struct Agent {
     session: Option<SessionLog>,
     /// Whether a session-log write failure has already been reported.
     session_warned: bool,
-    /// Compiled PreToolUse hooks (PLAN 6.5).
+    /// Compiled `PreToolUse` hooks (PLAN 6.5).
     hooks: Vec<Hook>,
 }
 
 impl Agent {
+    /// Build an agent from its configuration, provider, approver and policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError`] if a configured hook fails to compile.
     pub fn new(
         cfg: crate::config::Config,
         provider: Arc<dyn Provider>,
@@ -116,6 +121,11 @@ impl Agent {
     }
 
     /// Rebuild an agent from a session log (BC-5.5, PLAN 6.7).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::Session`] if the log cannot be read, fails hash-chain
+    /// verification, or cannot be reopened for appending.
     pub fn resume(
         cfg: crate::config::Config,
         provider: Arc<dyn Provider>,
@@ -307,6 +317,11 @@ impl Agent {
     /// Runs the summarisation step if there is anything to compact, replacing
     /// the history with a single summary message and writing a `compaction`
     /// log entry. Returns `true` when a compaction was performed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError`] if the summarisation request fails or the session
+    /// log cannot be written.
     pub async fn compact(&mut self) -> Result<bool, CoreError> {
         if self.history.is_empty() {
             return Ok(false);
@@ -315,6 +330,13 @@ impl Agent {
         Ok(true)
     }
 
+    /// Run one user turn: call the model and execute its tool calls until it stops.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::Provider`] if the model stream or a tool executor
+    /// fails, [`CoreError::ChannelClosed`] if the event receiver is dropped, and
+    /// [`CoreError`] if context compaction fails.
     pub async fn run_turn(
         &mut self,
         user_input: &str,

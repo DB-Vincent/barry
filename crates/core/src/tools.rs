@@ -682,7 +682,7 @@ fn kill_process_group(pid: u32) {
 }
 
 /// Returns `true` if a tool result indicates the sandbox blocked the command.
-/// The command failed (ok:false, exit_code != 0) and stderr contains a
+/// The command failed (ok:false, `exit_code` != 0) and stderr contains a
 /// sandbox denial message ("Operation not permitted", "Read-only file system",
 /// "Permission denied", or "No such file or directory" when writing outside
 /// the writable roots).
@@ -835,7 +835,7 @@ fn sandbox_spec(policy: &Policy) -> SandboxSpec {
 
 /// Run bash inside the OS sandbox with denial-retry support.
 ///
-/// If the sandbox blocks the command (exit_code != 0, stderr contains a
+/// If the sandbox blocks the command (`exit_code` != 0, stderr contains a
 /// sandbox denial message), offer the user a directory grant and retry once
 /// (PLAN 6.2, BC-4.2). If the user denies the grant, the original sandbox
 /// failure goes to the model unchanged.

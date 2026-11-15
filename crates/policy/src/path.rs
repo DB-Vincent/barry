@@ -28,6 +28,11 @@ pub enum PathError {
 /// `..`. Once a component does not exist, it (and all following components)
 /// are "remaining" and appended as-is. If any remaining component is `..`,
 /// the path is rejected.
+///
+/// # Errors
+///
+/// Returns [`PathError::DotDot`] if any component is `..`, and
+/// [`PathError::Io`] if an existing prefix cannot be canonicalised.
 pub fn canonicalise(cwd: &Path, path: &Path) -> Result<PathBuf, PathError> {
     let base = if path.is_absolute() {
         path.to_path_buf()

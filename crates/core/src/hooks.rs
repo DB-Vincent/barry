@@ -1,4 +1,4 @@
-//! PreToolUse hooks (PLAN 6.5).
+//! `PreToolUse` hooks (PLAN 6.5).
 //!
 //! Hooks run **outside** the sandbox, with the user's environment minus
 //! secret variables (`*KEY*|*TOKEN*|*SECRET*`). They receive a JSON payload

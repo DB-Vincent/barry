@@ -127,6 +127,10 @@ pub struct SessionLog {
 impl SessionLog {
     /// Create a new log file inside `dir`. The directory is `0700` and the
     /// file `0600` (BC-5.4).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionError::Io`] if the directory or file cannot be created.
     pub fn create_in(dir: &Path, agent_id: &str) -> Result<Self, SessionError> {
         create_private_dir(dir)?;
         let name = format!("{}-{}.jsonl", timestamp_for_name(), uuid::Uuid::new_v4());
@@ -143,11 +147,20 @@ impl SessionLog {
     }
 
     /// Create a log under `$XDG_STATE_HOME` (or `~/.local/state`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionError::Io`] if the directory or file cannot be created.
     pub fn create_default(agent_id: &str) -> Result<Self, SessionError> {
         Self::create_in(&default_session_dir(), agent_id)
     }
 
     /// Open an existing log and continue its chain. Used by `--resume`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionError`] if the file cannot be read or its last entry
+    /// cannot be parsed.
     pub fn open_append(path: &Path) -> Result<Self, SessionError> {
         let content = fs::read_to_string(path).map_err(|source| SessionError::Io {
             path: path.display().to_string(),
@@ -182,6 +195,11 @@ impl SessionLog {
     }
 
     /// Append one entry, redact it, hash-chain it, and fsync.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionError`] if the entry cannot be serialised or the write
+    /// or flush fails.
     pub fn append(&mut self, kind: EntryKind) -> Result<(), SessionError> {
         let mut value =
             serde_json::to_value(&kind).map_err(|err| SessionError::Format(err.to_string()))?;
@@ -226,6 +244,11 @@ impl SessionLog {
 }
 
 /// Verify the hash chain of a log file.
+///
+/// # Errors
+///
+/// Returns [`SessionError::Io`] if the file cannot be read. A broken chain is
+/// reported in the [`VerifyReport`], not as an error.
 pub fn verify(path: &Path) -> Result<VerifyReport, SessionError> {
     let content = fs::read_to_string(path).map_err(|source| SessionError::Io {
         path: path.display().to_string(),
@@ -322,6 +345,11 @@ pub fn default_session_dir() -> PathBuf {
 /// fragment (timestamp or UUID prefix) inside the default session directory.
 ///
 /// An ambiguous prefix is an error rather than an arbitrary pick.
+///
+/// # Errors
+///
+/// Returns [`SessionError`] if no session matches `spec`, or more than one
+/// does.
 pub fn resolve_session(spec: &str) -> Result<PathBuf, SessionError> {
     let direct = PathBuf::from(spec);
     if direct.is_file() {
