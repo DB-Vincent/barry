@@ -61,7 +61,7 @@ pub(crate) fn command(
 
     // Read-deny paths. No existence check: Seatbelt denies the path, so a
     // read-denied path created after the session started is denied too (#16).
-    for (i, p) in spec.read_deny.iter().enumerate() {
+    for i in 0..spec.read_deny.len() {
         profile.push_str(&format!(
             "(deny file-read* (subpath (param \"DENY_READ_{}\")))\n",
             i
