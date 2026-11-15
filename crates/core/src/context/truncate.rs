@@ -1,7 +1,14 @@
 use std::borrow::Cow;
 
-const HEAD_BYTES: usize = 12_000;
-const TAIL_BYTES: usize = 12_000;
+/// Bytes kept from the head of oversized text, and the same from the tail.
+pub(crate) const HEAD_BYTES: usize = 12_000;
+pub(crate) const TAIL_BYTES: usize = 12_000;
+
+/// The marker inserted between head and tail. Shared with the bounded read and
+/// stream capture so every truncated result reads the same.
+pub(crate) fn truncation_marker(cut: u64, total: u64) -> String {
+    format!("[... truncated {cut} of {total} bytes ...]")
+}
 
 /// Returns `s` unchanged (without copying) when it fits in `max_bytes`.
 /// Otherwise keeps the first 12,000 and last 12,000 bytes, joined by a marker
@@ -17,8 +24,9 @@ pub fn truncate(s: &str, max_bytes: usize) -> Cow<'_, str> {
     let cut = total - head_end - (total - tail_start);
 
     Cow::Owned(format!(
-        "{}\n[... truncated {cut} of {total} bytes ...]\n{}",
+        "{}\n{}\n{}",
         &s[..head_end],
+        truncation_marker(cut as u64, total as u64),
         &s[tail_start..],
     ))
 }
