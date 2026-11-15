@@ -1,8 +1,10 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
+use barry_core::Agent;
 /// BC-4.1 `echo x > ../outside/f` run by bash does not create the file, even
 /// though the rule layer asked and the user approved it "once" without a
 /// grant. This proves the sandbox is a separate layer from policy.
 use barry_core::config::Config;
-use barry_core::Agent;
 use barry_policy::{Policy, PolicyConfig};
 use barry_protocol::{ApprovalChoice, StopReason};
 use barry_testkit::scripted::Reply;
@@ -50,13 +52,17 @@ async fn bc_4_1_sandbox_blocks_outside_write_despite_approval() {
             max_turns: 10,
             context_window: 32_768,
             sandbox_network: true,
+            sandbox_unsandboxed: false,
+            redact_tool_output: false,
             fs_read_deny: vec![],
             fs_protected: vec![],
+            rules: vec![],
             hooks: vec![],
+            budgets: barry_core::budget::Budgets::default(),
         },
         provider,
         approver.clone(),
-        Some(policy),
+        policy,
     )
     .expect("agent constructs");
 

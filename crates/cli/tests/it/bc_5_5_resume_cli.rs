@@ -1,5 +1,7 @@
 //! BC-5.5 `barry --resume <file>` sends the earlier conversation in the first
 //! request to the model.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use barry_core::session::{EntryKind, SessionLog};
 use barry_protocol::Message;
 use barry_testkit::{FakeLlm, Reply};

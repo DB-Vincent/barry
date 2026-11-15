@@ -1,8 +1,6 @@
 //! LLM client for barry.
 //! Provider trait and shared request/event types.
 
-#![forbid(unsafe_code)]
-
 use barry_protocol::{Message, StopReason, ToolSpec, Usage};
 use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
@@ -17,6 +15,7 @@ pub struct LlmRequest {
 
 /// An event from a streaming LLM response.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum LlmEvent {
     TextDelta(String),
     ReasoningDelta(String),
@@ -29,13 +28,23 @@ pub enum LlmEvent {
 
 /// Errors from the LLM provider.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum LlmError {
     #[error("auth error for provider {provider}")]
     Auth { provider: String },
-    #[error("transport error: {message}")]
-    Transport { message: String },
-    #[error("stream error: {message}")]
-    Stream { message: String },
+    /// The HTTP request could not be built or sent.
+    #[error("transport error: {0}")]
+    Http(#[from] reqwest::Error),
+    /// The endpoint URL could not be joined with the request path.
+    #[error("transport error: invalid endpoint URL: {0}")]
+    InvalidUrl(#[from] url::ParseError),
+    /// The server answered with a non-success status. The body is dropped on
+    /// purpose: it may echo the API key.
+    #[error("transport error: unexpected status: {status}")]
+    UnexpectedStatus { status: u16 },
+    /// The response body failed while streaming.
+    #[error("stream error: {0}")]
+    Stream(#[source] reqwest::Error),
     #[error("cancelled")]
     Cancelled,
 }
@@ -52,7 +61,7 @@ pub trait Provider: Send + Sync {
 /// Provider quirks that differ between OpenAI-compatible servers.
 #[derive(Debug, Clone, Default)]
 pub struct Compat {
-    /// The field name used for reasoning deltas: "reasoning_content" | "reasoning"
+    /// The field name used for reasoning deltas: `"reasoning_content"` or `"reasoning"`
     pub reasoning_field: Option<String>,
     /// Whether the provider supports parallel tool calls
     pub supports_parallel_tool_calls: bool,
@@ -65,15 +74,3 @@ mod retry;
 mod sse;
 
 pub use openai::OpenAiProvider;
-
-impl std::fmt::Display for LlmEvent {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            LlmEvent::TextDelta(s) => write!(f, "TextDelta({})", s),
-            LlmEvent::ReasoningDelta(s) => write!(f, "ReasoningDelta({})", s),
-            LlmEvent::Done { stop, usage, .. } => {
-                write!(f, "Done{{stop={:?}, usage={:?}}}", stop, usage)
-            }
-        }
-    }
-}

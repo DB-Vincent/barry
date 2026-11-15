@@ -12,8 +12,6 @@
 //! If `bwrap` is missing on Linux, commands fail closed: they never run
 //! unsandboxed.
 
-#![forbid(unsafe_code)]
-
 use std::path::PathBuf;
 use thiserror::Error;
 
@@ -27,8 +25,15 @@ mod macos;
 pub enum SandboxError {
     #[error("bubblewrap (bwrap) not found; install it to run commands")]
     BwrapUnavailable,
-    #[error("sandbox error: {0}")]
-    Other(String),
+    /// The path of the running executable could not be determined.
+    #[error("cannot determine executable path: {0}")]
+    CurrentExe(#[source] std::io::Error),
+    /// The `barry` helper binary was not found next to the running executable.
+    #[error("cannot find the barry helper binary (looked next to {})", exe.display())]
+    HelperNotFound { exe: PathBuf },
+    /// The platform has no sandbox implementation.
+    #[error("sandbox not supported on this platform")]
+    Unsupported,
 }
 
 /// Specification for a sandboxed command execution.
@@ -79,6 +84,13 @@ pub(crate) fn sandbox_env() -> Vec<(String, String)> {
 /// On Linux this assembles a `bwrap` invocation that re-executes the barry
 /// binary as `__sandbox-exec`. On macOS it assembles a `sandbox-exec`
 /// invocation.
+///
+/// # Errors
+///
+/// Returns [`SandboxError::BwrapUnavailable`] if `bwrap` is missing on Linux,
+/// [`SandboxError::CurrentExe`] or [`SandboxError::HelperNotFound`] if the
+/// helper cannot be located, and [`SandboxError::Unsupported`] if the platform
+/// has no sandbox support.
 pub fn command(
     spec: &SandboxSpec,
     shell_command: &str,
@@ -90,9 +102,7 @@ pub fn command(
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     let _ = (spec, shell_command);
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    return Err(SandboxError::Other(
-        "sandbox not supported on this platform".into(),
-    ));
+    return Err(SandboxError::Unsupported);
 }
 
 /// Called first thing in `cli main()`. If the binary was invoked as
