@@ -2,10 +2,13 @@
 name = "barry-policy"
 version = "0.1.0"
 edition = "2021"
+publish = false
 
 [dependencies]
 barry-protocol = { workspace = true }
 thiserror = { workspace = true }
+tree-sitter = { workspace = true }
+tree-sitter-bash = { workspace = true }
 
 [dev-dependencies]
 barry-testkit = { workspace = true }

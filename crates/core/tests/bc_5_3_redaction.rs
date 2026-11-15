@@ -21,8 +21,11 @@ fn config() -> Config {
         max_turns: 10,
         context_window: 32_768,
         sandbox_network: true,
+        sandbox_unsandboxed: false,
+        redact_tool_output: false,
         fs_read_deny: vec![],
         fs_protected: vec![],
+        rules: vec![],
         hooks: vec![],
     }
 }
@@ -67,7 +70,7 @@ async fn bc_5_3_secrets_are_redacted_in_the_log_only() {
         config(),
         provider.clone(),
         Arc::new(ScriptedApprover::none()),
-        Some(policy(&ws)),
+        policy(&ws),
     )
     .expect("agent constructs")
     .with_session_log(log);
@@ -160,7 +163,7 @@ async fn bc_5_3_tool_decision_input_is_redacted() {
         config(),
         provider,
         Arc::new(ScriptedApprover::none()),
-        Some(policy(&ws)),
+        policy(&ws),
     )
     .expect("agent constructs")
     .with_session_log(log);

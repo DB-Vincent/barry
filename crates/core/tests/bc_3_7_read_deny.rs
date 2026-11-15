@@ -117,13 +117,16 @@ async fn bc_3_7_read_deny_blocks_secret_and_allows_normal_outside_read() {
             max_turns: 10,
             context_window: 32_768,
             sandbox_network: true,
+            sandbox_unsandboxed: false,
+            redact_tool_output: false,
             fs_read_deny: vec![],
             fs_protected: vec![],
+            rules: vec![],
             hooks: vec![],
         },
         provider.clone(),
         no_approver,
-        Some(policy),
+        policy,
     )
     .expect("agent constructs");
 
@@ -174,13 +177,16 @@ async fn bc_3_7_read_deny_blocks_secret_and_allows_normal_outside_read() {
             max_turns: 10,
             context_window: 32_768,
             sandbox_network: true,
+            sandbox_unsandboxed: false,
+            redact_tool_output: false,
             fs_read_deny: vec![],
             fs_protected: vec![],
+            rules: vec![],
             hooks: vec![],
         },
         provider2.clone(),
         no_approver2.clone(),
-        Some(policy2),
+        policy2,
     )
     .expect("agent constructs");
 
