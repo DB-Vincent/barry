@@ -1,6 +1,6 @@
 /// BC-2.11 The tool list sent to the model contains exactly
-/// `read, write, edit, bash, agent`, and the system prompt matches the
-/// approved snapshot (insta).
+/// `read, write, edit, bash` — the agent tool stays hidden until sub-agents
+/// exist (#33) — and the system prompt matches the approved snapshot (insta).
 ///
 /// The prompt is checked through the wire-shaped `LlmRequest` rather than by
 /// calling the builder directly, so the snapshot covers what the model really
@@ -62,15 +62,15 @@ impl Approver for LocalApprover {
     }
 }
 
-fn done_agent_call() -> LlmEvent {
+fn done_read_call(path: &str) -> LlmEvent {
     LlmEvent::Done {
         message: Message::Assistant {
             content: None,
             reasoning: None,
             tool_calls: vec![barry_protocol::ToolCall {
                 id: "call_1".to_string(),
-                name: "agent".to_string(),
-                arguments: json!({ "task": "look around" }),
+                name: "read".to_string(),
+                arguments: json!({ "path": path }),
             }],
         },
         stop: StopReason::ToolCalls,
@@ -100,8 +100,11 @@ async fn collect_events(mut rx: mpsc::Receiver<Event>) -> Vec<Event> {
 
 #[tokio::test]
 async fn bc_2_11_tool_list_is_exact_and_prompt_matches_snapshot() {
+    let fixture = tempfile::tempdir().unwrap();
+    let note = fixture.path().join("note.txt");
+    std::fs::write(&note, "hi\n").unwrap();
     let provider = Arc::new(RecordingProvider::new(vec![
-        done_agent_call(),
+        done_read_call(note.to_str().unwrap()),
         LlmEvent::TextDelta("ok".to_string()),
         done_text("ok"),
     ]));
@@ -141,13 +144,13 @@ async fn bc_2_11_tool_list_is_exact_and_prompt_matches_snapshot() {
     let requests = provider.requests.lock().unwrap();
     assert!(requests.len() >= 2, "expected a follow-up request");
 
-    // Exactly the five tools, in the order PLAN 5.1 lists them.
+    // Exactly the four implemented tools, in the order PLAN 5.1 lists them.
     let names: Vec<&str> = requests[0]
         .tools
         .iter()
         .map(|spec| spec.name.as_str())
         .collect();
-    assert_eq!(names, ["read", "write", "edit", "bash", "agent"]);
+    assert_eq!(names, ["read", "write", "edit", "bash"]);
 
     let system_of = |index: usize| -> String {
         match &requests[index].messages[0] {
