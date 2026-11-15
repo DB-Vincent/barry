@@ -155,6 +155,7 @@ dependencies = [
  "futures",
  "insta",
  "regex",
+ "rustix",
  "serde",
  "serde_json",
  "sha2",

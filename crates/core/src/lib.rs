@@ -2,9 +2,6 @@
 
 #![forbid(unsafe_code)]
 
-use std::future::Future;
-use std::pin::Pin;
-
 use barry_protocol::{ApprovalChoice, ApprovalRequest};
 
 pub mod agent;
@@ -17,8 +14,8 @@ pub mod session;
 pub mod tools;
 pub use agent::Agent;
 
-/// A future returned by [`Approver::decide`].
-pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+/// A boxed future, as returned by [`Approver::decide`].
+pub use futures::future::BoxFuture;
 
 /// Errors from the core agent.
 #[derive(Debug, thiserror::Error)]
