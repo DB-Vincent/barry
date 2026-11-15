@@ -1,6 +1,6 @@
 //! BC-6.1 AGENTS.md at the git root and in cwd (a subdirectory) both appear
 //! in the system prompt, root first. The global one comes before both.
-use barry_core::context::instructions::instructions_section;
+use barry_core::testing::instructions_section;
 use std::path::PathBuf;
 use std::sync::Mutex;
 

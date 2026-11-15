@@ -164,7 +164,7 @@ async fn bc_2_11_tool_list_is_exact_and_prompt_matches_snapshot() {
     );
 
     let cwd = std::env::current_dir().expect("cwd").display().to_string();
-    let date = barry_core::prompt::today();
+    let date = barry_core::testing::today();
     let mut normalized = first
         .replace(&cwd, "[CWD]")
         .replace(&date, "[DATE]")

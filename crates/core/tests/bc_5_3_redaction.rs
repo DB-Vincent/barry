@@ -115,7 +115,7 @@ async fn bc_5_3_secrets_are_redacted_in_the_log_only() {
 /// BC-5.3 Every pattern listed in PLAN 6.7 is redacted, not just `sk-`.
 #[test]
 fn bc_5_3_built_in_secret_patterns_are_redacted() {
-    let redactor = barry_core::redact::Redactor::new(vec![]);
+    let redactor = barry_core::testing::Redactor::new(vec![]);
     let secrets = [
         "ghp_123456789012345678901234567890123456",
         "AKIA1234567890ABCDEF",
