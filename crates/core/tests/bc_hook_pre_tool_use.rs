@@ -120,6 +120,38 @@ fn hook_allow() -> HookConfig {
     }
 }
 
+fn hook_failing(fail_closed: bool) -> HookConfig {
+    HookConfig {
+        matcher: "bash".to_string(),
+        command: vec!["sh".to_string(), "-c".to_string(), "exit 1".to_string()],
+        timeout_secs: 5,
+        fail_closed,
+    }
+}
+
+/// An approver that records the requests it sees and always answers the same.
+struct RecordingApprover {
+    requests: Mutex<Vec<ApprovalRequest>>,
+    choice: ApprovalChoice,
+}
+
+impl RecordingApprover {
+    fn new(choice: ApprovalChoice) -> Self {
+        Self {
+            requests: Mutex::new(Vec::new()),
+            choice,
+        }
+    }
+}
+
+impl Approver for RecordingApprover {
+    fn decide(&self, req: &ApprovalRequest) -> BoxFuture<'_, ApprovalChoice> {
+        self.requests.lock().unwrap().push(req.clone());
+        let choice = self.choice.clone();
+        Box::pin(async move { choice })
+    }
+}
+
 fn requests_of(provider: &Arc<RecordingProvider>) -> Vec<LlmRequest> {
     provider.requests.lock().unwrap().clone()
 }
@@ -300,4 +332,188 @@ async fn hook_updated_input_rewrites_edit() {
         "new\n",
         "the hook's old_string/new_string must be the edit that runs"
     );
+}
+
+/// `fail_closed` turns a hook failure (non-zero exit) into a block.
+#[tokio::test]
+async fn hook_fail_closed_blocks_on_failure() {
+    let config = config_with_hooks(vec![hook_failing(true)]);
+    let provider = Arc::new(RecordingProvider::new(vec![
+        done_tool("bash", json!({ "command": "echo hi" })),
+        done_text("acknowledged"),
+    ]));
+    let mut agent = Agent::new(config, provider.clone(), Arc::new(AlwaysAllow), None)
+        .expect("agent constructs");
+
+    let (tx, _rx) = mpsc::channel(32);
+    agent
+        .run_turn("run bash", tx, CancellationToken::new())
+        .await
+        .expect("turn completes");
+
+    let reqs = requests_of(&provider);
+    let content = last_tool_content(&reqs).expect("a tool result");
+    assert!(
+        content.contains("hook blocked"),
+        "fail_closed hook should block the tool: {content}"
+    );
+}
+
+/// Without `fail_closed`, the same failure only warns and the tool runs.
+#[tokio::test]
+async fn hook_warns_on_failure_when_not_fail_closed() {
+    let config = config_with_hooks(vec![hook_failing(false)]);
+    let provider = Arc::new(RecordingProvider::new(vec![
+        done_tool("bash", json!({ "command": "echo hi" })),
+        done_text("acknowledged"),
+    ]));
+    let mut agent = Agent::new(config, provider.clone(), Arc::new(AlwaysAllow), None)
+        .expect("agent constructs");
+
+    let (tx, _rx) = mpsc::channel(32);
+    agent
+        .run_turn("run bash", tx, CancellationToken::new())
+        .await
+        .expect("turn completes");
+
+    let reqs = requests_of(&provider);
+    let content = last_tool_content(&reqs).expect("a tool result");
+    assert!(
+        content.contains("hi"),
+        "a non-fail-closed hook failure must not block the tool: {content}"
+    );
+}
+
+/// Unparseable stdout is a hook failure, so `fail_closed` blocks on it.
+#[tokio::test]
+async fn hook_fail_closed_blocks_on_invalid_json() {
+    let hook = HookConfig {
+        matcher: "bash".to_string(),
+        command: vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "echo not-json".to_string(),
+        ],
+        timeout_secs: 5,
+        fail_closed: true,
+    };
+    let config = config_with_hooks(vec![hook]);
+    let provider = Arc::new(RecordingProvider::new(vec![
+        done_tool("bash", json!({ "command": "echo hi" })),
+        done_text("acknowledged"),
+    ]));
+    let mut agent = Agent::new(config, provider.clone(), Arc::new(AlwaysAllow), None)
+        .expect("agent constructs");
+
+    let (tx, _rx) = mpsc::channel(32);
+    agent
+        .run_turn("run bash", tx, CancellationToken::new())
+        .await
+        .expect("turn completes");
+
+    let reqs = requests_of(&provider);
+    let content = last_tool_content(&reqs).expect("a tool result");
+    assert!(
+        content.contains("hook blocked"),
+        "invalid hook output should block under fail_closed: {content}"
+    );
+}
+
+/// A timed-out hook is killed: it must not touch the filesystem after the turn.
+#[tokio::test]
+async fn hook_timeout_kills_the_process() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let marker = dir.path().join("survived");
+    let hook = HookConfig {
+        matcher: "bash".to_string(),
+        command: vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!("sleep 1.5; touch {}", marker.display()),
+        ],
+        timeout_secs: 1,
+        fail_closed: true,
+    };
+    let config = config_with_hooks(vec![hook]);
+    let provider = Arc::new(RecordingProvider::new(vec![
+        done_tool("bash", json!({ "command": "echo hi" })),
+        done_text("acknowledged"),
+    ]));
+    let mut agent = Agent::new(config, provider.clone(), Arc::new(AlwaysAllow), None)
+        .expect("agent constructs");
+
+    let (tx, _rx) = mpsc::channel(32);
+    agent
+        .run_turn("run bash", tx, CancellationToken::new())
+        .await
+        .expect("turn completes");
+
+    let reqs = requests_of(&provider);
+    let content = last_tool_content(&reqs).expect("a tool result");
+    assert!(
+        content.contains("hook blocked"),
+        "a timed-out fail_closed hook should block the tool: {content}"
+    );
+
+    // The hook would touch the marker at 1.5s; after the 1s timeout plus this
+    // wait it must be dead.
+    tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+    assert!(
+        !marker.exists(),
+        "the timed-out hook process was not killed"
+    );
+}
+
+/// `Ask` is a question for the user, not a silent allow.
+#[tokio::test]
+async fn hook_ask_is_routed_to_the_approver() {
+    let hook = HookConfig {
+        matcher: "bash".to_string(),
+        command: vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            r#"echo '{"decision":"ask","reason":"please confirm"}'"#.to_string(),
+        ],
+        timeout_secs: 5,
+        fail_closed: false,
+    };
+    let config = config_with_hooks(vec![hook]);
+    let provider = Arc::new(RecordingProvider::new(vec![
+        done_tool("bash", json!({ "command": "echo hi" })),
+        done_text("acknowledged"),
+    ]));
+    let approver = Arc::new(RecordingApprover::new(ApprovalChoice::Deny));
+    let mut agent =
+        Agent::new(config, provider.clone(), approver.clone(), None).expect("agent constructs");
+
+    let (tx, _rx) = mpsc::channel(32);
+    agent
+        .run_turn("run bash", tx, CancellationToken::new())
+        .await
+        .expect("turn completes");
+
+    let asked = approver.requests.lock().unwrap().clone();
+    assert_eq!(asked.len(), 1, "the hook's ask should reach the approver");
+    assert_eq!(asked[0].reason, "please confirm");
+
+    let reqs = requests_of(&provider);
+    let content = last_tool_content(&reqs).expect("a tool result");
+    assert!(
+        content.contains("denied by user"),
+        "the approver's denial must be final: {content}"
+    );
+}
+
+/// An empty hook command is a config error, not a panic.
+#[test]
+fn hook_with_empty_command_is_rejected() {
+    let config = config_with_hooks(vec![HookConfig {
+        matcher: "bash".to_string(),
+        command: vec![],
+        timeout_secs: 5,
+        fail_closed: false,
+    }]);
+    let provider = Arc::new(RecordingProvider::new(vec![]));
+    let result = Agent::new(config, provider, Arc::new(AlwaysAllow), None);
+    assert!(result.is_err(), "an empty hook command must be rejected");
 }

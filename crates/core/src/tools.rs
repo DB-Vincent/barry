@@ -262,7 +262,34 @@ pub(crate) async fn execute_tool(
                     .as_mut()
                     .map(|l| l.append(EntryKind::Notice { text: reason }));
             }
-            HookOutcome::Allow | HookOutcome::Ask { .. } => {}
+            HookOutcome::Ask { reason } => {
+                // PLAN 6.5: a hook may ask instead of deciding. The user
+                // answers; a denial is final, an approval still faces the
+                // policy check below.
+                let req = ApprovalRequest {
+                    id: call.id.clone(),
+                    tool: call.name.clone(),
+                    summary: format!("{} (asked by hook)", call.name),
+                    reason: reason.clone(),
+                    grant_path: None,
+                };
+                if approver.decide(&req).await == ApprovalChoice::Deny {
+                    record_decision(
+                        &mut log,
+                        call,
+                        &Decision::Deny {
+                            reason: format!("hook asked: {reason}"),
+                        },
+                        &DecidedBy::User,
+                    )?;
+                    return Ok(ToolResult::new(
+                        false,
+                        format!("denied by user (hook asked: {reason})"),
+                        "denied by user".to_string(),
+                    ));
+                }
+            }
+            HookOutcome::Allow => {}
         }
     }
     match call.name.as_str() {
