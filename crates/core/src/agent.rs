@@ -24,6 +24,20 @@ fn wrap_tool_output(tool: &str, ok: bool, content: &str) -> String {
     format!("<tool_output tool=\"{tool}\" ok=\"{ok}\">\n{content}\n</tool_output>")
 }
 
+/// The user message that asks for a summary (PLAN 6.4, step 2).
+const SUMMARISE_PROMPT: &str = "Summarise the conversation so far for continuing the task: goals, \
+    decisions, files changed, current state, open problems. Be concise.";
+
+/// How many of the newest user turns compaction leaves untouched (#21).
+///
+/// Summarising them away would drop the request being answered and the tool
+/// results it depends on, leaving the model to answer something it can no
+/// longer see.
+const KEEP_RECENT_TURNS: usize = 2;
+
+/// Compactions allowed in one `run_turn` (PLAN 6.4).
+const MAX_COMPACTIONS_PER_TURN: u64 = 3;
+
 /// The main agent that drives the turn loop.
 ///
 /// `history` outlives a single turn: the M2 REPL and BC-2.9 both need the
@@ -226,8 +240,12 @@ impl Agent {
     }
 
     /// Run compaction before building an LLM request (PLAN 6.4).
-    /// Returns `true` if a compaction was performed this turn.
-    async fn maybe_compact(&mut self, events: &mut mpsc::Sender<Event>) -> Result<bool, CoreError> {
+    /// Returns `true` if the context was reduced.
+    async fn maybe_compact(
+        &mut self,
+        events: &mut mpsc::Sender<Event>,
+        cancel: &CancellationToken,
+    ) -> Result<bool, CoreError> {
         if self.estimate_tokens() <= self.compaction_threshold() {
             return Ok(false);
         }
@@ -238,37 +256,76 @@ impl Agent {
             return Ok(true);
         }
 
-        // Step 2: summarise (PLAN 6.4, steps 2-3).
-        if self.compactions >= 3 {
+        // Steps 2-3: summarise, but only what is older than the turns the
+        // model still needs (#21).
+        if self.compactions >= MAX_COMPACTIONS_PER_TURN {
             events
                 .send(Event::Notice("context full".to_string()))
                 .await
                 .map_err(|_| CoreError::ChannelClosed)?;
             return Ok(false);
         }
-        self.summarise().await?;
-        self.compactions += 1;
-        Ok(true)
+        if self.summarise(KEEP_RECENT_TURNS, cancel).await? {
+            self.compactions += 1;
+            return Ok(true);
+        }
+        Ok(false)
     }
 
-    /// Send one non-streaming summarisation request and replace the history
-    /// with a single summary user message (PLAN 6.4, step 3).
-    async fn summarise(&mut self) -> Result<(), CoreError> {
+    /// Where the summarised region ends: the index of the `keep_turns`-th most
+    /// recent user turn, or 0 when the history has fewer turns than that.
+    ///
+    /// Cutting at a user message keeps every assistant tool call with its
+    /// results, as PLAN 6.4 requires, and keeps the request being answered and
+    /// its pending tool calls verbatim.
+    fn compaction_split(&self, keep_turns: usize) -> usize {
+        if keep_turns == 0 {
+            return self.history.len();
+        }
+        let starts: Vec<usize> = self
+            .history
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| matches!(m, Message::User { .. }))
+            .map(|(i, _)| i)
+            .collect();
+        if starts.len() <= keep_turns {
+            return 0;
+        }
+        starts[starts.len() - keep_turns]
+    }
+
+    /// Send one non-streaming summarisation request and replace the messages
+    /// before the `keep_turns` newest user turns with a single summary message
+    /// (PLAN 6.4, step 3).
+    ///
+    /// Returns false when there was nothing old enough to summarise or the
+    /// provider returned an empty summary: an empty answer must never wipe the
+    /// context (#21).
+    async fn summarise(
+        &mut self,
+        keep_turns: usize,
+        cancel: &CancellationToken,
+    ) -> Result<bool, CoreError> {
+        let split = self.compaction_split(keep_turns);
+        if split == 0 {
+            return Ok(false);
+        }
+
         let mut messages: Vec<Message> = vec![Message::System {
             content: self.system_prompt.clone(),
         }];
-        messages.extend(self.history.iter().cloned());
+        messages.extend(self.history[..split].iter().cloned());
         messages.push(Message::User {
-            content: "Summarise the conversation so far for continuing the task: goals, \
-                decisions, files changed, current state, open problems. Be concise."
-                .to_string(),
+            content: SUMMARISE_PROMPT.to_string(),
         });
 
         let req = LlmRequest {
             messages,
             tools: vec![],
         };
-        let mut stream = self.provider.stream(req, CancellationToken::new());
+        // Ctrl-C interrupts compaction like any other request (#21).
+        let mut stream = self.provider.stream(req, cancel.clone());
         let mut summary = String::new();
         while let Some(event) = stream.next().await {
             let event = event.map_err(|e| CoreError::Provider(e.to_string()))?;
@@ -286,13 +343,21 @@ impl Agent {
             }
         }
 
-        let mut replaced = Vec::new();
+        if summary.trim().is_empty() {
+            self.log(EntryKind::Notice {
+                text: "compaction skipped: the summary was empty".to_string(),
+            });
+            return Ok(false);
+        }
+
+        let mut replaced = Vec::with_capacity(self.history.len() - split + 1);
         replaced.push(Message::User {
             content: format!("[Summary of earlier conversation]\n{summary}"),
         });
+        replaced.extend(self.history[split..].iter().cloned());
         // PLAN 6.6: raw messages stay in the log; record what was compacted.
         self.log(EntryKind::Compaction {
-            removed_seq_range: [0, self.history.len() as u64],
+            removed_seq_range: [0, split as u64],
             summary: summary.clone(),
         });
         self.history = replaced;
@@ -300,19 +365,19 @@ impl Agent {
         self.log(EntryKind::Notice {
             text: "summarised earlier conversation to save context".to_string(),
         });
-        Ok(())
+        Ok(true)
     }
 
     /// Force compaction of the conversation context (PLAN 6.7 `/compact`).
-    /// Runs the summarisation step if there is anything to compact, replacing
-    /// the history with a single summary message and writing a `compaction`
-    /// log entry. Returns `true` when a compaction was performed.
+    ///
+    /// An explicit request summarises the whole history, including the current
+    /// turn, because the user asked for the context to be reduced. Returns
+    /// `true` when the history was replaced.
     pub async fn compact(&mut self) -> Result<bool, CoreError> {
         if self.history.is_empty() {
             return Ok(false);
         }
-        self.summarise().await?;
-        Ok(true)
+        self.summarise(0, &CancellationToken::new()).await
     }
 
     pub async fn run_turn(
@@ -337,9 +402,10 @@ impl Agent {
                 .await
                 .map_err(|_| CoreError::ChannelClosed)?;
 
-            let mut messages = Vec::with_capacity(self.history.len() + 1);
             // PLAN 6.4: compact the context before building the request.
-            self.maybe_compact(&mut events).await?;
+            self.maybe_compact(&mut events, &cancel).await?;
+
+            let mut messages = Vec::with_capacity(self.history.len() + 1);
             messages.push(Message::System {
                 content: self.system_prompt.clone(),
             });
