@@ -16,14 +16,12 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
+      # No toolchain input: the action installs the version pinned in
+      # rust-toolchain.toml (#40), so CI and local runs agree.
       - name: Install toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: stable
-          profile: minimal
-          components: rustfmt, clippy
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
 
       - name: Install bubblewrap (Linux)
         if: matrix.os == 'ubuntu-latest'
@@ -33,13 +31,13 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.cargo/registry
           key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Cache cargo target
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: target
           key: ${{ runner.os }}-cargo-target-${{ hashFiles('**/Cargo.lock') }}
@@ -53,5 +51,16 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
-      # cargo-deny is parked (invalid deny.toml for 0.20, license allowlist,
-      # RUSTSEC advisories). Re-enable when those findings are addressed.
+  # cargo-deny was parked on an invalid deny.toml (#41), so known RUSTSEC
+  # advisories, licences and non-crates.io sources went unchecked. The file is
+  # now schema v2, and this job runs the advisory, licence, source and ban
+  # checks on every pull request.
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: cargo deny
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
+        with:
+          command: check

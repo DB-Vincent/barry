@@ -76,6 +76,7 @@ pub(crate) fn neutralize(text: &str) -> String {
 ///
 /// `git_root` is the nearest ancestor of `cwd` containing `.git`, or `cwd`
 /// itself if there is none. `cwd` is the current working directory.
+#[must_use]
 pub fn instructions_section(git_root: &Path, cwd: &Path) -> String {
     let mut files: Vec<(PathBuf, String, Origin)> = Vec::new();
 
@@ -107,8 +108,7 @@ pub fn instructions_section(git_root: &Path, cwd: &Path) -> String {
         if let Ok(content) = std::fs::read_to_string(&candidate) {
             let label = path
                 .strip_prefix(git_root)
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|_| "AGENTS.md".to_string());
+                .map_or_else(|_| "AGENTS.md".to_string(), |p| p.display().to_string());
             let label = if label.is_empty() {
                 "AGENTS.md".to_string()
             } else {

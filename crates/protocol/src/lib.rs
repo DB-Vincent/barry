@@ -1,8 +1,6 @@
 //! Core types for the barry agent harness.
 //! Types only — no logic, no I/O.
 
-#![forbid(unsafe_code)]
-
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -54,12 +52,16 @@ pub struct ToolSpec {
 
 /// Why the model stopped generating.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[non_exhaustive]
 pub enum StopReason {
     Stop,
     Length,
     ToolCalls,
     ContentFilter,
     Aborted,
+    /// The context could not be reduced any further, so the turn stopped
+    /// instead of sending a request that would overflow (#22).
+    ContextFull,
     Error(String),
 }
 
@@ -72,6 +74,7 @@ pub struct Usage {
 
 /// The policy decision for a tool or command.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[non_exhaustive]
 pub enum Decision {
     Allow,
     Ask { reason: String },
@@ -80,6 +83,7 @@ pub enum Decision {
 
 /// Who made the decision.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[non_exhaustive]
 pub enum DecidedBy {
     Rule(String),
     User,
@@ -107,6 +111,7 @@ pub struct ApprovalRequest {
 
 /// Events emitted by the core agent loop to the front end.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[non_exhaustive]
 pub enum Event {
     TurnStarted,
     TextDelta(String),

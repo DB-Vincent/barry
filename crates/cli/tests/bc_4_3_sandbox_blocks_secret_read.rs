@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-4.3 `cat ~/.ssh/id_test` in bash fails, and the model never receives
 /// `FAKE-PRIVATE-KEY`.
 use barry_testkit::{FakeLlm, Reply};
@@ -25,10 +27,7 @@ async fn bc_4_3_sandbox_blocks_secret_read() {
     // read_deny including ~/.ssh.
     let config_path = dir.path().join("config.toml");
     let id_test_path = ssh_dir.join("id_test");
-    let config_content = format!(
-        "default_model = \"local\"\nmax_turns = 10\nread_deny = [\"{}\"]\n",
-        id_test_path.display()
-    );
+    let config_content = format!("[fs]\nread_deny = [\"{}\"]\n", id_test_path.display());
     std::fs::write(&config_path, config_content).expect("write config");
 
     let llm = FakeLlm::start(vec![
