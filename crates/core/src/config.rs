@@ -1,9 +1,16 @@
 //! Configuration loading.
+//!
+//! The file is deserialized into structs that reject unknown keys (#26). The
+//! hand-rolled parser this replaced ignored anything it did not recognise, so a
+//! misspelled `read_denny = [...]` left the credential paths unprotected with
+//! no warning at all: the user believed they had configured a deny that never
+//! existed.
 
 use std::path::Path;
 
 use barry_policy::BashRule;
 use barry_protocol::Decision;
+use serde::Deserialize;
 use thiserror::Error;
 
 /// Errors from config loading.
@@ -104,9 +111,9 @@ impl Default for Config {
             // directories are opt-in, because the output goes to the model
             // and the model may be remote (#10).
             sandbox_network: false,
-            redact_tool_output: false,
             fs_read_deny: default_read_deny(),
             fs_protected: default_protected(),
+            redact_tool_output: false,
             rules: vec![],
             hooks: vec![],
         }
@@ -132,160 +139,145 @@ impl Config {
             source,
         })?;
 
-        let value: toml::Value = toml::from_str(&content).map_err(|source| ConfigError::Toml {
+        let file: FileConfig = toml::from_str(&content).map_err(|source| ConfigError::Toml {
             path: path.display().to_string(),
             source,
         })?;
 
-        // Extract sandbox/fs sections.
-        let sandbox_network = value
-            .get("sandbox")
-            .and_then(|s| s.get("network"))
-            .and_then(|n| n.as_bool())
-            .unwrap_or(false);
+        let path_label = path.display().to_string();
+        let invalid = |message: String| ConfigError::Invalid {
+            path: path_label.clone(),
+            message,
+        };
 
-        let fs_read_deny: Vec<String> = value
-            .get("fs")
-            .and_then(|f| f.get("read_deny"))
-            .and_then(|r| r.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                    .collect()
-            })
-            .unwrap_or_else(default_read_deny);
+        let mut rules = Vec::with_capacity(file.rule.len());
+        for rule in file.rule {
+            if rule.id.is_empty() || rule.pattern.is_empty() {
+                return Err(invalid(format!(
+                    "rule {}: both `id` and `match` must be non-empty",
+                    rule.id
+                )));
+            }
+            let decision = match rule.decision.as_str() {
+                "allow" => Decision::Allow,
+                "deny" => Decision::Deny {
+                    reason: format!("rule {} denies this command", rule.id),
+                },
+                "ask" => Decision::Ask {
+                    reason: format!("rule {} requires approval", rule.id),
+                },
+                other => {
+                    return Err(invalid(format!(
+                        "rule {}: unknown decision {other:?} (expected allow, ask or deny)",
+                        rule.id
+                    )))
+                }
+            };
+            rules.push(BashRule {
+                id: rule.id,
+                r#match: rule.pattern,
+                decision,
+            });
+        }
 
-        let fs_protected: Vec<String> = value
-            .get("fs")
-            .and_then(|f| f.get("protected"))
-            .and_then(|r| r.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                    .collect()
-            })
-            .unwrap_or_else(default_protected);
-
-        let redact_tool_output = value
-            .get("redaction")
-            .and_then(|r| r.get("tool_output"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
-        let rules = parse_rules(path, &value)?;
-
-        let hooks: Vec<HookConfig> = value
-            .get("hooks")
-            .and_then(|h| h.get("PreToolUse"))
-            .and_then(|r| r.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| {
-                        let matcher = v
-                            .get("matcher")
-                            .and_then(|m| m.as_str())
-                            .map(|s| s.to_string())
-                            .unwrap_or_default();
-                        let command: Vec<String> = v
-                            .get("command")
-                            .and_then(|c| c.as_array())
-                            .map(|arr| {
-                                arr.iter()
-                                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-                        let timeout_secs = v
-                            .get("timeout_secs")
-                            .and_then(|t| t.as_integer())
-                            .and_then(|t| u64::try_from(t).ok())
-                            .unwrap_or(10);
-                        let fail_closed = v
-                            .get("fail_closed")
-                            .and_then(|f| f.as_bool())
-                            .unwrap_or(false);
-                        if matcher.is_empty() || command.is_empty() {
-                            None
-                        } else {
-                            Some(HookConfig {
-                                matcher,
-                                command,
-                                timeout_secs,
-                                fail_closed,
-                            })
-                        }
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        // A hook the user wrote must not be dropped because half of it is
+        // missing, for the same reason a malformed rule is an error.
+        let mut hooks = Vec::with_capacity(file.hooks.pre_tool_use.len());
+        for hook in file.hooks.pre_tool_use {
+            if hook.matcher.is_empty() || hook.command.is_empty() {
+                return Err(invalid(
+                    "hooks.PreToolUse: `matcher` and `command` are both required".to_string(),
+                ));
+            }
+            hooks.push(HookConfig {
+                matcher: hook.matcher,
+                command: hook.command,
+                timeout_secs: hook.timeout_secs,
+                fail_closed: hook.fail_closed,
+            });
+        }
 
         Ok(Some(Self {
             default_model: "local".to_string(),
             max_turns: 50,
             context_window: 32_768,
-            sandbox_network,
-            fs_read_deny,
-            fs_protected,
-            redact_tool_output,
+            sandbox_network: file.sandbox.network,
+            fs_read_deny: file.fs.read_deny.unwrap_or_else(default_read_deny),
+            fs_protected: file.fs.protected.unwrap_or_else(default_protected),
+            redact_tool_output: file.redaction.tool_output,
             rules,
             hooks,
         }))
     }
 }
 
-/// Parse the `[[rule]]` array: `{ id, match, decision }`.
+/// The config file as written.
 ///
-/// A malformed rule is a config error, not a silently skipped entry: a rule
-/// the user believes is protecting them must never be dropped.
-fn parse_rules(path: &Path, value: &toml::Value) -> Result<Vec<BashRule>, ConfigError> {
-    let Some(entries) = value.get("rule").and_then(|r| r.as_array()) else {
-        return Ok(Vec::new());
-    };
+/// `deny_unknown_fields` on every level is the point of #26: a key the loader
+/// does not implement is an error, not a setting that quietly does nothing.
+/// That includes the PLAN 6.8 keys that are still unimplemented, which is
+/// deliberate - a config written for a future schema should fail loudly rather
+/// than half-apply.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+struct FileConfig {
+    sandbox: SandboxSection,
+    fs: FsSection,
+    redaction: RedactionSection,
+    /// `[[rule]]` entries.
+    #[serde(rename = "rule")]
+    rule: Vec<RuleSection>,
+    hooks: HooksSection,
+}
 
-    let mut rules = Vec::with_capacity(entries.len());
-    for (index, entry) in entries.iter().enumerate() {
-        let invalid = |message: String| ConfigError::Invalid {
-            path: path.display().to_string(),
-            message,
-        };
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+struct SandboxSection {
+    network: bool,
+}
 
-        let id = entry
-            .get("id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let pattern = entry
-            .get("match")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        if id.is_empty() || pattern.is_empty() {
-            return Err(invalid(format!(
-                "rule {index}: both `id` and `match` are required"
-            )));
-        }
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+struct FsSection {
+    /// `None` means "not configured", so the credential defaults apply; `[]`
+    /// means the user opted out of them.
+    read_deny: Option<Vec<String>>,
+    protected: Option<Vec<String>>,
+}
 
-        let decision = match entry.get("decision").and_then(|v| v.as_str()) {
-            Some("allow") => Decision::Allow,
-            Some("deny") => Decision::Deny {
-                reason: format!("rule {id} denies this command"),
-            },
-            Some("ask") => Decision::Ask {
-                reason: format!("rule {id} requires approval"),
-            },
-            Some(other) => {
-                return Err(invalid(format!(
-                    "rule {id}: unknown decision {other:?} (expected allow, ask or deny)"
-                )))
-            }
-            None => return Err(invalid(format!("rule {id}: `decision` is required"))),
-        };
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+struct RedactionSection {
+    tool_output: bool,
+}
 
-        rules.push(BashRule {
-            id,
-            r#match: pattern,
-            decision,
-        });
-    }
-    Ok(rules)
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuleSection {
+    id: String,
+    #[serde(rename = "match")]
+    pattern: String,
+    decision: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+struct HooksSection {
+    #[serde(rename = "PreToolUse")]
+    pre_tool_use: Vec<HookSection>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HookSection {
+    matcher: String,
+    command: Vec<String>,
+    #[serde(default = "default_hook_timeout")]
+    timeout_secs: u64,
+    #[serde(default)]
+    fail_closed: bool,
+}
+
+fn default_hook_timeout() -> u64 {
+    10
 }
