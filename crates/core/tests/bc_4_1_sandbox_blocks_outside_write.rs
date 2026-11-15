@@ -58,6 +58,7 @@ async fn bc_4_1_sandbox_blocks_outside_write_despite_approval() {
             fs_protected: vec![],
             rules: vec![],
             hooks: vec![],
+            budgets: barry_core::budget::Budgets::default(),
         },
         provider,
         approver.clone(),

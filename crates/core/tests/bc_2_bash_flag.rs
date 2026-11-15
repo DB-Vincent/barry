@@ -213,6 +213,7 @@ fn config(unsandboxed: bool) -> Config {
         fs_protected: vec![],
         rules: vec![],
         hooks: vec![],
+        budgets: barry_core::budget::Budgets::default(),
     }
 }
 

@@ -128,6 +128,7 @@ async fn bc_3_3_grant_persists_in_session_same_dir_different_dir_asks() {
             fs_protected: vec![],
             rules: vec![],
             hooks: vec![],
+            budgets: barry_core::budget::Budgets::default(),
         },
         provider.clone(),
         approver_clone,

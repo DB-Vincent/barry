@@ -115,6 +115,7 @@ async fn bc_3_6_protected_path_inside_cwd_asks() {
             fs_protected: vec![],
             rules: vec![],
             hooks: vec![],
+            budgets: barry_core::budget::Budgets::default(),
         },
         provider.clone(),
         approver,

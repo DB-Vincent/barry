@@ -113,6 +113,7 @@ async fn bc_2_5_large_output_is_truncated() {
             fs_protected: vec![],
             rules: vec![],
             hooks: vec![],
+            budgets: barry_core::budget::Budgets::default(),
         },
         provider.clone(),
         approver,

@@ -344,11 +344,23 @@ where
     }
 }
 
+/// Run a command and record how long it took.
+async fn run_bash_command(
+    cmd: tokio::process::Command,
+    timeout_secs: u64,
+    cancel: &CancellationToken,
+) -> Result<ToolResult, CoreError> {
+    let start = std::time::Instant::now();
+    let mut result = run_bash_command_inner(cmd, timeout_secs, cancel).await?;
+    result.bash_time = start.elapsed();
+    Ok(result)
+}
+
 /// Common execution logic: spawn, race cancel vs timeout vs completion.
 ///
 /// Both pipes are drained as the command writes, so memory stays bounded no
 /// matter how much it prints (#19).
-async fn run_bash_command(
+async fn run_bash_command_inner(
     cmd: tokio::process::Command,
     timeout_secs: u64,
     cancel: &CancellationToken,
@@ -502,13 +514,16 @@ async fn run_bash(
                 .grant_dir(ctx.policy, &target_dir)
                 .map_err(|e| CoreError::Provider(format!("failed to grant directory: {e}")))?;
             record_grant(log, &target_dir)?;
-            execute_bash_sandboxed(
+            let mut second = execute_bash_sandboxed(
                 sandbox_spec(ctx.policy, ctx.grants),
                 command,
                 timeout_secs,
                 ctx.cancel,
             )
-            .await
+            .await?;
+            // Both runs count against the bash-time budget.
+            second.bash_time += first.bash_time;
+            Ok(second)
         }
     }
 }

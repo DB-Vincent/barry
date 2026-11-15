@@ -92,6 +92,7 @@ fn config_with_window(window: u64) -> barry_core::config::Config {
         fs_protected: vec![],
         rules: vec![],
         hooks: vec![],
+        budgets: barry_core::budget::Budgets::default(),
     }
 }
 

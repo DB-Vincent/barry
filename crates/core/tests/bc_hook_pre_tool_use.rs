@@ -91,6 +91,7 @@ fn config_with_hooks(hooks: Vec<HookConfig>) -> Config {
         fs_protected: vec![],
         rules: vec![],
         hooks,
+        budgets: barry_core::budget::Budgets::default(),
     }
 }
 

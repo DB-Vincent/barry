@@ -113,6 +113,7 @@ async fn run_tool(tool: &str, arguments: serde_json::Value) -> Run {
             fs_protected: vec![],
             rules: vec![],
             hooks: vec![],
+            budgets: barry_core::budget::Budgets::default(),
         },
         provider.clone(),
         approver,

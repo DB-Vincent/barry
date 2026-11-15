@@ -15,7 +15,7 @@ mod write;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use barry_policy::{Policy, SessionGrants};
 use barry_protocol::{ApprovalChoice, ApprovalRequest, DecidedBy, Decision, ToolCall, ToolSpec};
@@ -33,6 +33,8 @@ pub(crate) struct ToolResult {
     pub(crate) display: String,
     /// Bash exit code, when the tool ran a command.
     pub(crate) exit_code: Option<i32>,
+    /// Time spent running a bash command, for the bash-time budget.
+    pub(crate) bash_time: Duration,
 }
 
 impl ToolResult {
@@ -42,6 +44,7 @@ impl ToolResult {
             content,
             display,
             exit_code: None,
+            bash_time: Duration::ZERO,
         }
     }
 

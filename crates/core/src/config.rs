@@ -13,6 +13,8 @@ use barry_protocol::Decision;
 use serde::Deserialize;
 use thiserror::Error;
 
+use crate::budget::Budgets;
+
 /// Errors from config loading.
 #[derive(Debug, Error)]
 pub enum ConfigError {
@@ -58,6 +60,8 @@ pub struct Config {
     pub rules: Vec<BashRule>,
     /// Hooks run around tool execution (PLAN 6.5).
     pub hooks: Vec<HookConfig>,
+    /// Limits for one autonomous run (`[budgets]`).
+    pub budgets: Budgets,
 }
 
 /// A single hook: `[[hooks.PreToolUse]]` in the config.
@@ -121,6 +125,7 @@ impl Default for Config {
             redact_tool_output: false,
             rules: vec![],
             hooks: vec![],
+            budgets: Budgets::default(),
         }
     }
 }
@@ -232,6 +237,18 @@ impl Config {
             });
         }
 
+        // A wrong type is a config error (see `BudgetsSection`), and so is a
+        // cost limit without prices: an ignored limit protects nothing.
+        let budgets = Budgets {
+            max_total_tokens: file.budgets.max_total_tokens,
+            max_cost_usd: file.budgets.max_cost_usd,
+            max_wall_secs: file.budgets.max_wall_secs,
+            max_bash_secs: file.budgets.max_bash_secs,
+            price_input_per_mtok: file.budgets.price_input_per_mtok,
+            price_output_per_mtok: file.budgets.price_output_per_mtok,
+        };
+        budgets.validate().map_err(invalid)?;
+
         Ok(Some(Self {
             default_model: "local".to_string(),
             max_turns: 50,
@@ -243,6 +260,7 @@ impl Config {
             redact_tool_output: file.redaction.tool_output,
             rules,
             hooks,
+            budgets,
         }))
     }
 }
@@ -264,6 +282,19 @@ struct FileConfig {
     #[serde(rename = "rule")]
     rule: Vec<RuleSection>,
     hooks: HooksSection,
+    budgets: BudgetsSection,
+}
+
+/// `[budgets]`: see [`Budgets`].
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+struct BudgetsSection {
+    max_total_tokens: Option<u64>,
+    max_cost_usd: Option<f64>,
+    max_wall_secs: Option<u64>,
+    max_bash_secs: Option<u64>,
+    price_input_per_mtok: Option<f64>,
+    price_output_per_mtok: Option<f64>,
 }
 
 #[derive(Debug, Default, Deserialize)]

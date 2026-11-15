@@ -79,6 +79,7 @@ async fn bc_6_4_a_context_that_cannot_shrink_ends_the_turn() {
             fs_protected: vec![],
             rules: vec![],
             hooks: vec![],
+            budgets: barry_core::budget::Budgets::default(),
         },
         provider.clone(),
         Arc::new(AlwaysAllow),

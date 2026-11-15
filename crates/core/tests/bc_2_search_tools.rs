@@ -126,6 +126,7 @@ async fn search_tools_respect_read_deny() {
             fs_protected: vec![],
             rules: vec![],
             hooks: vec![],
+            budgets: barry_core::budget::Budgets::default(),
         },
         provider.clone(),
         Arc::new(ScriptedApprover::none()),

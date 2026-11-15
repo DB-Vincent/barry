@@ -111,6 +111,7 @@ async fn agent_tool_is_advertised_and_honestly_unavailable() {
             fs_protected: vec![],
             rules: vec![],
             hooks: vec![],
+            budgets: barry_core::budget::Budgets::default(),
         },
         provider.clone(),
         Arc::new(LocalApprover),

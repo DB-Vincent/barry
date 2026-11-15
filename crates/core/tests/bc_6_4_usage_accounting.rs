@@ -86,6 +86,7 @@ async fn bc_6_4_reported_usage_drives_the_context_estimate() {
             fs_protected: vec![],
             rules: vec![],
             hooks: vec![],
+            budgets: barry_core::budget::Budgets::default(),
         },
         provider.clone(),
         Arc::new(AlwaysAllow),

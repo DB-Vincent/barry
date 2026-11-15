@@ -112,6 +112,7 @@ async fn bc_2_8_unknown_tool_is_ok_false_result() {
             fs_protected: vec![],
             rules: vec![],
             hooks: vec![],
+            budgets: barry_core::budget::Budgets::default(),
         },
         provider.clone(),
         Arc::new(LocalApprover),

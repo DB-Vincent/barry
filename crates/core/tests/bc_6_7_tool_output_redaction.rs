@@ -30,6 +30,7 @@ fn config(redact_tool_output: bool) -> Config {
         fs_protected: vec![],
         rules: vec![],
         hooks: vec![],
+        budgets: barry_core::budget::Budgets::default(),
     }
 }
 

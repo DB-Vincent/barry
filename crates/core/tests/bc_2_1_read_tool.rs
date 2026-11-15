@@ -124,6 +124,7 @@ async fn bc_2_1_read_tool_returns_numbered_contents() {
             fs_protected: vec![],
             rules: vec![],
             hooks: vec![],
+            budgets: barry_core::budget::Budgets::default(),
         },
         provider.clone(),
         approver,

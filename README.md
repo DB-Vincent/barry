@@ -50,8 +50,12 @@ Options:
 | `--json` | Emit each event as one JSONL line instead of pretty output |
 | `--model <name>` | Override the model id sent to the provider |
 | `--resume <file\|prefix>` | Continue a session from its log file, or a timestamp/UUID prefix in the default session directory |
+| `--max-tokens <n>` | Stop after `n` input plus output tokens |
+| `--max-cost-usd <usd>` | Stop after an estimated cost; needs token prices in `[budgets]` |
+| `--max-wall-secs <n>` | Stop after `n` wall-clock seconds |
+| `--max-bash-secs <n>` | Stop after `n` cumulative seconds of bash commands |
 
-Exit codes: `0` on success, `1` on error/aborted, `2` on config error, `3` on turn limit.
+Exit codes: `0` on success, `1` on error/aborted, `2` on config error, `3` on turn limit, `4` on budget exceeded.
 
 Headless mode never prompts for approval: an action that needs approval is denied, and the model is told that approval is unavailable in headless mode.
 
@@ -94,6 +98,20 @@ protected = [".git", ".barry", ".env"]
 [redaction]
 tool_output = true  # default false; mask secrets in tool output sent to the model
 ```
+
+Budgets limit one run (one prompt) and are off by default. The flags above override the config file:
+
+```toml
+[budgets]
+max_total_tokens = 200000
+max_wall_secs = 1800
+max_bash_secs = 600
+max_cost_usd = 2.5
+price_input_per_mtok = 1.0    # USD per million input tokens
+price_output_per_mtok = 3.0   # USD per million output tokens
+```
+
+When a limit is exceeded the run ends with a notice and `StopReason::BudgetExceeded` (`{"BudgetExceeded":"Tokens"|"Cost"|"WallClock"|"BashTime"}` in `--json` output). Limits are checked between steps, so a run can overshoot by one model request or one command; tool calls that were pending are answered as not run. Token counts come from the provider's usage report, or are estimated at four bytes per token when the provider reports none. `max_cost_usd` without both prices is a config error (exit 2), because it could never trigger.
 
 The model id comes from `--model` (default `local`) and the endpoint from `BARRY_BASE_URL` (default `http://localhost:11434/v1`).
 

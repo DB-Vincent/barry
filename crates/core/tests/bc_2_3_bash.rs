@@ -107,6 +107,7 @@ async fn bc_2_3_bash_exit_1_continues_turn() {
             fs_protected: vec![],
             rules: vec![],
             hooks: vec![],
+            budgets: barry_core::budget::Budgets::default(),
         },
         provider.clone(),
         approver,

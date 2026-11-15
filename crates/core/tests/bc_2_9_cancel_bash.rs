@@ -125,6 +125,7 @@ async fn bc_2_9_cancel_during_bash_kills_it() {
             fs_protected: vec![],
             rules: vec![],
             hooks: vec![],
+            budgets: barry_core::budget::Budgets::default(),
         },
         provider.clone(),
         Arc::new(LocalApprover),

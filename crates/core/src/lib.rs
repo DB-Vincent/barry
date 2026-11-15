@@ -4,6 +4,7 @@ use barry_protocol::{ApprovalChoice, ApprovalRequest};
 
 mod agent;
 pub(crate) mod bounded;
+pub mod budget;
 pub mod config;
 mod context;
 mod hooks;

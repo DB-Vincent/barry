@@ -114,6 +114,7 @@ async fn bc_3_5_dangling_symlink_write_does_not_escape_cwd() {
             fs_protected: vec![],
             rules: vec![],
             hooks: vec![],
+            budgets: barry_core::budget::Budgets::default(),
         },
         provider.clone(),
         approver,

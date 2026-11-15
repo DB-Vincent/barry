@@ -113,6 +113,7 @@ async fn tool_result_content(name: &str, arguments: serde_json::Value) -> String
             fs_protected: vec![],
             rules: vec![],
             hooks: vec![],
+            budgets: barry_core::budget::Budgets::default(),
         },
         provider.clone(),
         Arc::new(LocalApprover),

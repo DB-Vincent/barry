@@ -80,6 +80,7 @@ async fn bc_6_7_compact_forces_compaction() {
         fs_protected: vec![],
         rules: vec![],
         hooks: vec![],
+        budgets: barry_core::budget::Budgets::default(),
     };
 
     let provider = Arc::new(RecordingProvider::new(vec![
@@ -128,6 +129,7 @@ async fn bc_6_7_compact_nothing_to_compact() {
         fs_protected: vec![],
         rules: vec![],
         hooks: vec![],
+        budgets: barry_core::budget::Budgets::default(),
     };
     let mut agent = Agent::new(
         config,

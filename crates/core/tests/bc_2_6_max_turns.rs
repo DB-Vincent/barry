@@ -90,6 +90,7 @@ async fn bc_2_6_turn_limit_emits_notice_and_stops() {
             fs_protected: vec![],
             rules: vec![],
             hooks: vec![],
+            budgets: barry_core::budget::Budgets::default(),
         },
         provider.clone(),
         Arc::new(LocalApprover),

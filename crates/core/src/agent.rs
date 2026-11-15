@@ -11,6 +11,7 @@ use futures::sink::SinkExt;
 use futures::stream::StreamExt;
 use tokio_util::sync::CancellationToken;
 
+use crate::budget::{BudgetTracker, Exceeded};
 use crate::config::Config;
 use crate::hooks::Hook;
 use crate::prompt::{PromptContext, system_prompt};
@@ -108,6 +109,8 @@ pub struct Agent {
     redactor: Redactor,
     /// Compiled `PreToolUse` hooks (PLAN 6.5).
     hooks: Vec<Hook>,
+    /// Budget totals for the current `run_turn`.
+    budget: BudgetTracker,
     /// Files the model has read or written, for the `edit` stale check.
     reads: ReadState,
 }
@@ -165,6 +168,8 @@ impl Agent {
             skills_section: &skills_section,
         });
 
+        cfg.budgets.validate().map_err(CoreError::Config)?;
+        let budget = BudgetTracker::new(cfg.budgets.clone());
         let context_window = cfg.context_window;
         let unsandboxed = cfg.sandbox_unsandboxed;
         let hooks: Vec<Hook> = cfg
@@ -193,6 +198,7 @@ impl Agent {
             session_warned: false,
             redactor: Redactor::from_env(),
             hooks,
+            budget,
             reads: ReadState::default(),
         })
     }
@@ -511,6 +517,31 @@ impl Agent {
         self.summarise(0, &CancellationToken::new()).await
     }
 
+    /// End the run because a budget ran out: tell the user, record it, and
+    /// finish the turn with a distinct stop reason.
+    async fn stop_for_budget(
+        &mut self,
+        exceeded: Exceeded,
+        events: &mut mpsc::Sender<Event>,
+    ) -> Result<StopReason, CoreError> {
+        events
+            .send(Event::Notice(exceeded.message.clone()))
+            .await
+            .map_err(|_| CoreError::ChannelClosed)?;
+        self.log(EntryKind::Notice {
+            text: exceeded.message,
+        });
+        let stop = StopReason::BudgetExceeded(exceeded.kind);
+        events
+            .send(Event::TurnFinished {
+                stop: stop.clone(),
+                usage: Some(self.budget.usage()),
+            })
+            .await
+            .map_err(|_| CoreError::ChannelClosed)?;
+        Ok(stop)
+    }
+
     /// Run one user turn: call the model and execute its tool calls until it stops.
     ///
     /// # Errors
@@ -532,9 +563,13 @@ impl Agent {
             message: user_message,
         });
 
-        let tools = tool_specs(); // read, glob, grep, ls, write, edit, bash, agent
+        let tools = tool_specs(); // read, glob, grep, ls, write, edit, bash
+        self.budget = BudgetTracker::new(self.cfg.budgets.clone());
 
         for _turn in 0..self.cfg.max_turns {
+            if let Some(exceeded) = self.budget.exceeded() {
+                return self.stop_for_budget(exceeded, &mut events).await;
+            }
             events
                 .send(Event::TurnStarted)
                 .await
@@ -566,6 +601,8 @@ impl Agent {
             });
             messages.extend(self.history.iter().cloned());
 
+            // Used to estimate usage when the provider does not report it.
+            let request_bytes: u64 = messages.iter().map(message_bytes).sum();
             let req = LlmRequest {
                 messages,
                 tools: tools.clone(),
@@ -593,6 +630,12 @@ impl Agent {
                         stop,
                         usage,
                     } => {
+                        // Prefer the provider's numbers; otherwise estimate at
+                        // 4 bytes per token so a budget still applies.
+                        self.budget.add_usage(&usage.clone().unwrap_or(Usage {
+                            input_tokens: request_bytes / 4,
+                            output_tokens: message_bytes(&message) / 4,
+                        }));
                         self.history.push(message.clone());
                         // A reported usage replaces the byte estimate for
                         // everything up to this response (#23).
@@ -622,17 +665,27 @@ impl Agent {
                                     Message::Assistant { tool_calls, .. } => tool_calls.clone(),
                                     _ => Vec::new(),
                                 };
+                                let mut budget_hit: Option<Exceeded> = None;
                                 for call in &tool_calls {
-                                    // Once a cancel lands, the remaining calls are not
-                                    // executed, but each still gets a Tool message: the
-                                    // model rejects a reply whose call ids are not all
-                                    // answered, so the history must stay well formed.
-                                    if cancel.is_cancelled() {
+                                    if budget_hit.is_none() {
+                                        budget_hit = self.budget.exceeded();
+                                    }
+                                    // Once a cancel lands or a budget runs out, the
+                                    // remaining calls are not executed, but each still
+                                    // gets a Tool message: the model rejects a reply
+                                    // whose call ids are not all answered, so the
+                                    // history must stay well formed.
+                                    if cancel.is_cancelled() || budget_hit.is_some() {
+                                        let (why, decided_by) = if cancel.is_cancelled() {
+                                            ("interrupted by user", DecidedBy::User)
+                                        } else {
+                                            ("not run: run budget exceeded", DecidedBy::Default)
+                                        };
                                         events
                                             .send(Event::ToolFinished {
                                                 id: call.id.clone(),
                                                 ok: false,
-                                                display: "interrupted by user".to_string(),
+                                                display: why.to_string(),
                                             })
                                             .await
                                             .map_err(|_| CoreError::ChannelClosed)?;
@@ -640,18 +693,14 @@ impl Agent {
                                         self.log_decision(
                                             call,
                                             Decision::Deny {
-                                                reason: "interrupted by user".to_string(),
+                                                reason: why.to_string(),
                                             },
-                                            DecidedBy::User,
+                                            decided_by,
                                         );
                                         self.log_result(call, &interrupted);
                                         let tool_message = Message::Tool {
                                             tool_call_id: call.id.clone(),
-                                            content: wrap_tool_output(
-                                                &call.name,
-                                                false,
-                                                "interrupted by user",
-                                            ),
+                                            content: wrap_tool_output(&call.name, false, why),
                                             ok: false,
                                         };
                                         self.history.push(tool_message.clone());
@@ -686,6 +735,7 @@ impl Agent {
                                         execute_tool(call, &mut ctx, self.session.as_mut())
                                             .await
                                             .unwrap_or_else(|err| ToolResult::internal_error(&err));
+                                    self.budget.add_bash(result.bash_time);
 
                                     events
                                         .send(Event::ToolFinished {
@@ -724,6 +774,11 @@ impl Agent {
                                         .await
                                         .map_err(|_| CoreError::ChannelClosed)?;
                                     return Ok(StopReason::Aborted);
+                                }
+                                if let Some(exceeded) =
+                                    budget_hit.or_else(|| self.budget.exceeded())
+                                {
+                                    return self.stop_for_budget(exceeded, &mut events).await;
                                 }
                                 // loop continues: call LLM again with tool results
                             }

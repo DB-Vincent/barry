@@ -113,6 +113,7 @@ async fn bc_3_2_write_outside_cwd_denied_by_user() {
             fs_protected: vec![],
             rules: vec![],
             hooks: vec![],
+            budgets: barry_core::budget::Budgets::default(),
         },
         provider.clone(),
         approver_clone,

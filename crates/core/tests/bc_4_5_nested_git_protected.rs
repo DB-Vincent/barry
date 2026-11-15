@@ -28,6 +28,7 @@ fn config() -> Config {
         fs_protected: vec![".git".to_string()],
         rules: vec![],
         hooks: vec![],
+        budgets: barry_core::budget::Budgets::default(),
     }
 }
 
