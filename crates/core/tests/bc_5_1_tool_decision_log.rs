@@ -1,8 +1,8 @@
+use barry_core::Agent;
 /// BC-5.1 Every tool call produces a `tool_decision` entry recording who
 /// decided (rule id, user or hook) and a `tool_result` entry.
 use barry_core::config::Config;
 use barry_core::session::SessionLog;
-use barry_core::Agent;
 use barry_policy::{BashRule, Policy, PolicyConfig};
 use barry_protocol::{ApprovalChoice, Decision};
 use barry_testkit::scripted::Reply;

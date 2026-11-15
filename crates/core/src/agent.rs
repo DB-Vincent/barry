@@ -13,9 +13,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
 use crate::hooks::Hook;
-use crate::prompt::{system_prompt, PromptContext};
-use crate::session::{self, decided_by_label, decision_label, EntryKind, SessionError, SessionLog};
-use crate::tools::{execute_tool, tool_specs, ToolResult};
+use crate::prompt::{PromptContext, system_prompt};
+use crate::session::{self, EntryKind, SessionError, SessionLog, decided_by_label, decision_label};
+use crate::tools::{ToolResult, execute_tool, tool_specs};
 use crate::{Approver, CoreError};
 
 /// Wraps a tool result for the model (PLAN 5). Kept here rather than in
@@ -147,11 +147,11 @@ impl Agent {
         let Some(session) = self.session.as_mut() else {
             return;
         };
-        if let Err(err) = session.append(kind) {
-            if !self.session_warned {
-                self.session_warned = true;
-                eprintln!("warning: session log write failed: {err}");
-            }
+        if let Err(err) = session.append(kind)
+            && !self.session_warned
+        {
+            self.session_warned = true;
+            eprintln!("warning: session log write failed: {err}");
         }
     }
 

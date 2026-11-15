@@ -71,7 +71,10 @@ async fn bc_1_6_401_auth_error_no_key_leak() {
     // 401 is not retryable: one attempt, then an auth error.
     let llm = FakeLlm::start(vec![Reply::HttpStatus { status: 401 }]).await;
 
-    std::env::set_var("BARRY_TEST_KEY", "sk-secret-key");
+    // SAFETY: test-only; no other thread reads or writes the environment here.
+    unsafe {
+        std::env::set_var("BARRY_TEST_KEY", "sk-secret-key");
+    }
     let provider = provider(&llm, Some("BARRY_TEST_KEY"));
     let events = collect(provider).await;
 

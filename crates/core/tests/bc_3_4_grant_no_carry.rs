@@ -1,9 +1,9 @@
+use barry_core::Agent;
 /// BC-3.4 A grant does not carry over to a new session.
 ///
 /// A fresh Agent (new Policy) re-asks for the same outside directory,
 /// because the previous session's grants are gone.
 use barry_core::config::Config;
-use barry_core::Agent;
 use barry_llm::{LlmEvent, LlmRequest};
 use barry_policy::{Policy, PolicyConfig};
 use barry_protocol::{Message, StopReason};

@@ -12,7 +12,7 @@ use std::path::{Component, Path, PathBuf};
 use thiserror::Error;
 
 pub use barry_protocol::Decision;
-pub use path::{canonicalise, is_under, PathError};
+pub use path::{PathError, canonicalise, is_under};
 
 /// Errors from the policy engine.
 #[derive(Debug, Error)]
@@ -100,7 +100,7 @@ impl Policy {
             Err(_) => {
                 return Decision::Deny {
                     reason: "cannot canonicalise path".into(),
-                }
+                };
             }
         };
 
@@ -128,7 +128,7 @@ impl Policy {
                         reason: "cannot canonicalise path".into(),
                     },
                     None,
-                )
+                );
             }
         };
 
@@ -143,15 +143,15 @@ impl Policy {
         // Protected path components (e.g. `.git`, `.env`) always ask.
         // Check every component, not just the final one (PLAN 6.1.1).
         for component in canonical.components() {
-            if let Some(name) = component.as_os_str().to_str() {
-                if self.protected.iter().any(|p| p == name) {
-                    return (
-                        Decision::Ask {
-                            reason: format!("protected path: {name}"),
-                        },
-                        None,
-                    );
-                }
+            if let Some(name) = component.as_os_str().to_str()
+                && self.protected.iter().any(|p| p == name)
+            {
+                return (
+                    Decision::Ask {
+                        reason: format!("protected path: {name}"),
+                    },
+                    None,
+                );
             }
         }
 

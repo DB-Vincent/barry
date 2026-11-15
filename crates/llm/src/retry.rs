@@ -41,7 +41,7 @@ pub(crate) async fn send_with_retry(
             Err(e) if last_attempt => {
                 return Err(LlmError::Transport {
                     message: e.to_string(),
-                })
+                });
             }
             Err(_) => tokio::time::sleep(backoff(attempt)).await,
         }

@@ -6,9 +6,15 @@ static HOME_LOCK: Mutex<()> = Mutex::new(());
 
 fn with_home<F: FnOnce() -> R, R>(home: &tempfile::TempDir, f: F) -> R {
     let _guard = HOME_LOCK.lock().unwrap();
-    std::env::set_var("HOME", home.path());
+    // SAFETY: test-only; no other thread reads or writes the environment here.
+    unsafe {
+        std::env::set_var("HOME", home.path());
+    }
     let r = f();
-    std::env::remove_var("HOME");
+    // SAFETY: test-only; no other thread reads or writes the environment here.
+    unsafe {
+        std::env::remove_var("HOME");
+    }
     r
 }
 

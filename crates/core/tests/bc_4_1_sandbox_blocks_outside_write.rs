@@ -1,8 +1,8 @@
+use barry_core::Agent;
 /// BC-4.1 `echo x > ../outside/f` run by bash does not create the file, even
 /// though the rule layer asked and the user approved it "once" without a
 /// grant. This proves the sandbox is a separate layer from policy.
 use barry_core::config::Config;
-use barry_core::Agent;
 use barry_policy::{Policy, PolicyConfig};
 use barry_protocol::{ApprovalChoice, StopReason};
 use barry_testkit::scripted::Reply;

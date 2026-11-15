@@ -1,8 +1,8 @@
+use barry_core::Agent;
 /// BC-5.5 After `--resume`, the first request to the model contains the
 /// earlier conversation.
 use barry_core::config::Config;
 use barry_core::session::{EntryKind, SessionLog};
-use barry_core::Agent;
 use barry_policy::{Policy, PolicyConfig};
 use barry_protocol::Message;
 use barry_testkit::scripted::Reply;

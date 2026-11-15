@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 use crate::config::Config;
 use crate::context::truncate;
 use crate::hooks::{Hook, HookOutcome};
-use crate::session::{decided_by_label, decision_label, EntryKind, SessionLog};
+use crate::session::{EntryKind, SessionLog, decided_by_label, decision_label};
 use crate::{Approver, CoreError};
 
 /// The result of one tool call, before it becomes a [`barry_protocol::Message::Tool`].
@@ -581,10 +581,10 @@ async fn check_write_approval(
                 }),
                 ApprovalChoice::Once | ApprovalChoice::AlwaysThisSession => {
                     let mut granted = None;
-                    if let Some(dir) = grant_path {
-                        if policy.grant_dir(&dir).is_ok() {
-                            granted = Some(dir);
-                        }
+                    if let Some(dir) = grant_path
+                        && policy.grant_dir(&dir).is_ok()
+                    {
+                        granted = Some(dir);
                     }
                     Ok(WriteDecision {
                         allowed: true,

@@ -48,7 +48,10 @@ fn assert_done(events: &[Result<LlmEvent, LlmError>]) {
 
 #[tokio::test]
 async fn bc_1_7_key_set_sends_bearer_header() {
-    std::env::set_var("BARRY_TEST_KEY_A", "sk-test-123");
+    // SAFETY: test-only; no other thread reads or writes the environment here.
+    unsafe {
+        std::env::set_var("BARRY_TEST_KEY_A", "sk-test-123");
+    }
     let (llm, events) = run(
         vec![Reply::Text {
             content: "hi".to_string(),

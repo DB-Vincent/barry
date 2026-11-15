@@ -1,9 +1,9 @@
+use barry_core::Agent;
 /// BC-3.6 Writing `.git/hooks/pre-commit` inside cwd asks for approval.
 ///
 /// Protected path components (e.g. `.git`) always trigger Ask, even for
 /// paths inside cwd.
 use barry_core::config::Config;
-use barry_core::Agent;
 use barry_llm::{LlmEvent, LlmRequest};
 use barry_policy::{Policy, PolicyConfig};
 use barry_protocol::{Message, StopReason};

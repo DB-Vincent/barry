@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use barry_policy::Policy;
 use barry_protocol::{DecidedBy, Decision, Message};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
