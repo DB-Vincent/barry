@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// PLAN 5.1 lists `agent` as one of the five tools, and BC-2.11 requires the
 /// advertised list to contain exactly read, write, edit, bash, agent. The
 /// sub-agent itself is PLAN 6.6 (M8), so until then the tool must exist and
@@ -103,13 +105,16 @@ async fn agent_tool_is_advertised_and_honestly_unavailable() {
             max_turns: 10,
             context_window: 32_768,
             sandbox_network: true,
+            sandbox_unsandboxed: true,
+            redact_tool_output: false,
             fs_read_deny: vec![],
             fs_protected: vec![],
+            rules: vec![],
             hooks: vec![],
         },
         provider.clone(),
         Arc::new(LocalApprover),
-        None,
+        permissive_policy(),
     )
     .expect("agent constructs");
 
@@ -129,10 +134,11 @@ async fn agent_tool_is_advertised_and_honestly_unavailable() {
     );
 
     let requests = provider.requests.lock().unwrap();
-    // Advertised: the first request's tool list names it.
+    // Hidden: the first request's tool list does not name it, so the model is
+    // not invited to spend a turn on a tool that cannot work yet (#33).
     assert!(
-        requests[0].tools.iter().any(|t| t.name == "agent"),
-        "the agent tool must be in the advertised list"
+        !requests[0].tools.iter().any(|t| t.name == "agent"),
+        "the agent tool must not be advertised before M8"
     );
 
     let content = requests[1]
@@ -150,6 +156,22 @@ async fn agent_tool_is_advertised_and_honestly_unavailable() {
     );
     assert!(
         !content.contains("unknown tool"),
-        "an advertised tool must not look like a typo: {content}"
+        "a tool the model can still call must not look like a typo: {content}"
     );
+}
+
+/// A policy with no rules and no read-deny, for tests that cover the turn loop
+/// and the tool plumbing rather than the policy engine (#30). It pre-approves
+/// nothing: a write outside its own cwd goes to the test approver.
+fn permissive_policy() -> barry_policy::Policy {
+    barry_policy::Policy::new(barry_policy::PolicyConfig {
+        cwd: std::env::temp_dir().join("barry-test-policy-cwd"),
+        home: std::env::temp_dir().join("barry-test-policy-home"),
+        extra_writable: vec![],
+        read_deny: vec![],
+        protected: vec![],
+        rules: vec![],
+        network: true,
+    })
+    .expect("policy constructs")
 }

@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-1.3 Given two tool calls in one reply,
 /// when the provider receives them, then both are returned with their ids
 /// in index order.
