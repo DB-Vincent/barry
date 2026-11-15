@@ -940,12 +940,10 @@ fn sandbox_spec(policy: &Policy) -> SandboxSpec {
         writable_roots: policy.writable_roots().to_vec(),
         grants: policy.grants().to_vec(),
         read_deny: policy.read_deny_paths().to_vec(),
-        protected_ro: policy
-            .protected()
-            .iter()
-            .map(|p| policy.cwd().join(p))
-            .filter(|p| p.exists())
-            .collect(),
+        // Every protected path under every writable root, including nested
+        // repositories. Computed by the policy, not `cwd.join(p)` here, so an
+        // extra writable root or a submodule is protected too.
+        protected_ro: policy.protected_paths().to_vec(),
         network: policy.network(),
     }
 }
