@@ -19,7 +19,7 @@ thiserror = { workspace = true }
 futures = { workspace = true }
 time = { workspace = true }
 tokio-util = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "process", "io-util", "signal", "sync"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "process", "io-util", "fs", "signal", "sync"] }
 
 [dev-dependencies]
 barry-testkit = { workspace = true }
