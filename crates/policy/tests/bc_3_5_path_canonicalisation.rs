@@ -1,9 +1,11 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-3.5: `../x` and a symlink inside cwd that points outside are both
 /// treated as outside cwd.
 ///
 /// The canonicalisation must reject `..` components and resolve symlinks,
 /// so that neither escape hatch reaches a path inside cwd.
-use barry_policy::{Decision, Policy, PolicyConfig};
+use barry_policy::{Decision, Policy, PolicyConfig, SessionGrants};
 use barry_testkit::Workspace;
 
 fn default_config(ws: &Workspace) -> PolicyConfig {
@@ -25,7 +27,7 @@ fn bc_3_5_dotdot_path_is_treated_as_outside_cwd() {
 
     // cwd/../x escapes cwd via `..`; must not be Allow.
     let dotdot = ws.cwd().join("../x");
-    let (decision, _grant) = policy.check_write(&dotdot);
+    let (decision, _grant) = policy.check_write(&dotdot, &SessionGrants::new());
 
     assert!(
         matches!(decision, Decision::Ask { .. }),
@@ -43,7 +45,7 @@ fn bc_3_5_symlink_outside_cwd_is_treated_as_outside_cwd() {
     std::os::unix::fs::symlink(ws.outside(), &link).unwrap();
 
     let through_link = link.join("secret.txt");
-    let (decision, _grant) = policy.check_write(&through_link);
+    let (decision, _grant) = policy.check_write(&through_link, &SessionGrants::new());
 
     assert!(
         matches!(decision, Decision::Ask { .. }),
@@ -58,7 +60,7 @@ fn bc_3_1_path_inside_cwd_is_allowed() {
 
     // A normal path inside cwd is Allow with no grant needed.
     let inside = ws.file("src/main.rs");
-    let (decision, grant) = policy.check_write(&inside);
+    let (decision, grant) = policy.check_write(&inside, &SessionGrants::new());
 
     assert_eq!(decision, Decision::Allow);
     assert!(grant.is_none(), "inside cwd needs no grant: {grant:?}");

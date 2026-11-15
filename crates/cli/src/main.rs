@@ -1,7 +1,5 @@
 //! The `barry` binary: entry point, headless mode and the REPL.
 
-#![forbid(unsafe_code)]
-
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -14,6 +12,7 @@ use futures::stream::StreamExt;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
+use barry_core::approval_file::PolicyFileApprover;
 use barry_core::config::Config;
 use barry_core::session::{self, SessionLog};
 use barry_core::{Agent, Approver, BoxFuture, RunStats};
@@ -69,6 +68,22 @@ struct Cli {
     /// Resume a session from a log file or a UUID/timestamp prefix
     #[arg(long = "resume")]
     resume: Option<String>,
+    /// Approve only the actions listed in this TOML file (headless only);
+    /// every other action that needs approval is denied
+    #[arg(long = "approval-file", requires = "prompt")]
+    approval_file: Option<PathBuf>,
+    /// Stop a run after this many input plus output tokens
+    #[arg(long = "max-tokens")]
+    max_tokens: Option<u64>,
+    /// Stop a run after this estimated cost in USD (needs token prices in config)
+    #[arg(long = "max-cost-usd")]
+    max_cost_usd: Option<f64>,
+    /// Stop a run after this many wall-clock seconds
+    #[arg(long = "max-wall-secs")]
+    max_wall_secs: Option<u64>,
+    /// Stop a run after this many cumulative seconds of bash commands
+    #[arg(long = "max-bash-secs")]
+    max_bash_secs: Option<u64>,
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -85,6 +100,11 @@ enum Commands {
         #[command(subcommand)]
         command: LogCommands,
     },
+    /// Show the configuration in effect
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommands,
+    },
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -94,6 +114,12 @@ enum RulesCommands {
         /// The command to check
         command: String,
     },
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum ConfigCommands {
+    /// Print the effective config and the file it came from
+    Show,
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -123,7 +149,7 @@ async fn main() -> ExitCode {
     run_helper_if_invoked();
 
     // Load config first; on error, exit 2 with a clean message.
-    let cfg = match Config::load() {
+    let mut cfg = match Config::load() {
         Ok(Some(cfg)) => cfg,
         Ok(None) => Config::default(),
         Err(err) => {
@@ -134,18 +160,37 @@ async fn main() -> ExitCode {
 
     let cli = Cli::parse();
 
+    // Flags override the `[budgets]` config section.
+    let budgets = &mut cfg.budgets;
+    budgets.max_total_tokens = cli.max_tokens.or(budgets.max_total_tokens);
+    budgets.max_cost_usd = cli.max_cost_usd.or(budgets.max_cost_usd);
+    budgets.max_wall_secs = cli.max_wall_secs.or(budgets.max_wall_secs);
+    budgets.max_bash_secs = cli.max_bash_secs.or(budgets.max_bash_secs);
+    if let Err(message) = budgets.validate() {
+        eprintln!("config error: {message}");
+        return ExitCode::from(2);
+    }
+
     if let Some(command) = cli.command {
-        return run_command(command);
+        return run_command(command, &cfg);
     }
 
     let Some(prompt) = cli.prompt else {
         return repl::run(cfg, cli.model, cli.resume).await;
     };
 
-    run_headless(cfg, prompt, cli.json, cli.model, cli.resume).await
+    run_headless(
+        cfg,
+        prompt,
+        cli.json,
+        cli.model,
+        cli.resume,
+        cli.approval_file,
+    )
+    .await
 }
 
-fn run_command(command: Commands) -> ExitCode {
+fn run_command(command: Commands, cfg: &Config) -> ExitCode {
     match command {
         Commands::Log { command } => match command {
             LogCommands::Verify { file } => match session::verify(&file) {
@@ -167,17 +212,26 @@ fn run_command(command: Commands) -> ExitCode {
         },
         Commands::Rules { command } => match command {
             Some(RulesCommands::Check { command }) => {
-                let cfg = barry_policy::PolicyConfig {
+                let policy_cfg = barry_policy::PolicyConfig {
                     cwd: std::env::current_dir().unwrap_or_default(),
                     home: std::env::var("HOME").map(PathBuf::from).unwrap_or_default(),
                     extra_writable: vec![],
-                    read_deny: vec![],
-                    protected: vec![],
-                    rules: vec![],
-                    network: true,
+                    read_deny: cfg.fs_read_deny.clone(),
+                    protected: cfg.fs_protected.clone(),
+                    rules: cfg.rules.clone(),
+                    network: cfg.sandbox_network,
                 };
-                let policy = barry_policy::Policy::new(cfg).expect("policy");
-                let (decision, rule_id) = policy.check_bash(&command);
+                let policy = match barry_policy::Policy::new(policy_cfg) {
+                    Ok(policy) => policy,
+                    // A policy that cannot be built is a config error, not a
+                    // reason to panic inside `rules check` (#44).
+                    Err(err) => {
+                        eprintln!("error: {err}");
+                        return ExitCode::from(2);
+                    }
+                };
+                let (decision, rule_id) =
+                    policy.check_bash(&command, &barry_policy::SessionGrants::new());
                 match decision {
                     barry_protocol::Decision::Allow => {
                         if let Some(id) = &rule_id {
@@ -203,6 +257,11 @@ fn run_command(command: Commands) -> ExitCode {
                         }
                         ExitCode::from(1)
                     }
+                    // Decision is non-exhaustive: treat an unknown one as a refusal.
+                    _ => {
+                        eprintln!("deny: unknown policy decision");
+                        ExitCode::from(1)
+                    }
                 }
             }
             None => {
@@ -210,6 +269,84 @@ fn run_command(command: Commands) -> ExitCode {
                 ExitCode::from(exit::CONFIG)
             }
         },
+        Commands::Config { command } => match command {
+            ConfigCommands::Show => show_config(cfg),
+        },
+    }
+}
+
+/// `barry config show`: print the configuration in effect and the file it came
+/// from (#27).
+///
+/// Values are the merged result, so the built-in defaults are visible even when
+/// no file exists - which is the whole point when a user wonders why a read was
+/// denied or a network command refused.
+fn show_config(cfg: &Config) -> ExitCode {
+    let configured = std::env::var("BARRY_CONFIG")
+        .ok()
+        .map(PathBuf::from)
+        .or_else(barry_core::config::default_config_path);
+
+    match configured.as_ref() {
+        Some(path) if path.exists() => println!("config_file: {}", path.display()),
+        Some(path) => println!(
+            "config_file: none, built-in defaults applied (looked at {})",
+            path.display()
+        ),
+        None => println!("config_file: none, built-in defaults applied"),
+    }
+
+    println!("default_model: {}", cfg.default_model);
+    println!("max_turns: {}", cfg.max_turns);
+    println!("context_window: {}", cfg.context_window);
+    println!("sandbox.network: {}", cfg.sandbox_network);
+    println!("redaction.tool_output: {}", cfg.redact_tool_output);
+    println!("fs.read_deny: {}", list_or_none(&cfg.fs_read_deny));
+    println!("fs.protected: {}", list_or_none(&cfg.fs_protected));
+
+    if cfg.rules.is_empty() {
+        println!("rules: none");
+    }
+    for rule in &cfg.rules {
+        println!(
+            "rule: {} {:?} -> {}",
+            rule.id,
+            rule.r#match,
+            decision_name(&rule.decision)
+        );
+    }
+
+    if cfg.hooks.is_empty() {
+        println!("hooks: none");
+    }
+    for hook in &cfg.hooks {
+        println!(
+            "hook: {} -> {} (timeout {}s, fail_closed {})",
+            hook.matcher,
+            hook.command.join(" "),
+            hook.timeout_secs,
+            hook.fail_closed
+        );
+    }
+
+    ExitCode::SUCCESS
+}
+
+fn list_or_none(items: &[String]) -> String {
+    if items.is_empty() {
+        "none".to_string()
+    } else {
+        items.join(", ")
+    }
+}
+
+fn decision_name(decision: &barry_protocol::Decision) -> &'static str {
+    match decision {
+        barry_protocol::Decision::Allow => "allow",
+        barry_protocol::Decision::Deny { .. } => "deny",
+        barry_protocol::Decision::Ask { .. } => "ask",
+        // Decision is non-exhaustive: label a variant this code does not know.
+        _ => "unknown",
     }
 }
 
@@ -219,7 +356,23 @@ async fn run_headless(
     json: bool,
     model: Option<String>,
     resume: Option<String>,
+    approval_file: Option<PathBuf>,
 ) -> ExitCode {
+    // Without an approval file every request is denied. With one, only the
+    // listed actions are approved and the rest are still denied.
+    let approver: Arc<dyn Approver> = match approval_file {
+        None => Arc::new(HeadlessApprover),
+        Some(path) => {
+            let cwd = std::env::current_dir().unwrap_or_default();
+            match PolicyFileApprover::from_file(&path, &cwd, cfg.fs_protected.clone()) {
+                Ok(approver) => Arc::new(approver),
+                Err(err) => {
+                    eprintln!("{err}");
+                    return ExitCode::from(2);
+                }
+            }
+        }
+    };
     let model = model.unwrap_or_else(|| cfg.default_model.clone());
     // The audit log records the model actually used, including --model.
     cfg.default_model = model.clone();
@@ -238,16 +391,23 @@ async fn run_headless(
 
     // Build the sandbox policy from config. Headless mode never trusts
     // project config, so only defaults + config file values apply.
-    let policy = Policy::new(barry_policy::PolicyConfig {
+    // A policy that cannot be built is a config error: report it and exit 2
+    // rather than panicking halfway through starting a session (#44).
+    let policy = match Policy::new(barry_policy::PolicyConfig {
         cwd: std::env::current_dir().unwrap_or_default(),
         home: std::env::var("HOME").map(PathBuf::from).unwrap_or_default(),
         extra_writable: vec![],
         read_deny: cfg.fs_read_deny.clone(),
         protected: cfg.fs_protected.clone(),
-        rules: vec![],
+        rules: cfg.rules.clone(),
         network: cfg.sandbox_network,
-    })
-    .expect("policy constructs");
+    }) {
+        Ok(policy) => policy,
+        Err(err) => {
+            eprintln!("error: {err}");
+            return ExitCode::from(2);
+        }
+    };
 
     let mut agent = match resume {
         Some(spec) => {
@@ -258,13 +418,7 @@ async fn run_headless(
                     return ExitCode::from(exit::CONFIG);
                 }
             };
-            match Agent::resume(
-                cfg,
-                provider,
-                Arc::new(HeadlessApprover),
-                Some(policy),
-                &path,
-            ) {
+            match Agent::resume(cfg, provider, approver, policy, &path) {
                 Ok(agent) => agent,
                 Err(err) => {
                     eprintln!("{err}");
@@ -273,14 +427,13 @@ async fn run_headless(
             }
         }
         None => {
-            let mut agent =
-                match Agent::new(cfg, provider, Arc::new(HeadlessApprover), Some(policy)) {
-                    Ok(agent) => agent,
-                    Err(err) => {
-                        eprintln!("{err}");
-                        return ExitCode::from(1);
-                    }
-                };
+            let mut agent = match Agent::new(cfg, provider, approver, policy) {
+                Ok(agent) => agent,
+                Err(err) => {
+                    eprintln!("{err}");
+                    return ExitCode::from(1);
+                }
+            };
             // PLAN 6.7: every session is audited. A read-only state directory
             // must not make barry unusable, so a failure only warns.
             match SessionLog::create_default("main") {

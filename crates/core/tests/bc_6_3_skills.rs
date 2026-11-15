@@ -1,6 +1,8 @@
 //! BC-6.3 A skill's name, description and path appear in the system prompt,
 //! and its body does not.
-use barry_core::context::skills::skills_section;
+
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+use barry_core::testing::skills_section;
 use std::path::PathBuf;
 
 fn write_skill(dir: PathBuf, _name: &str, frontmatter: &str, body: &str) {

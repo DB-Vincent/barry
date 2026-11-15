@@ -1,3 +1,9 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(
+    unsafe_code,
+    reason = "Rust 2024 makes env::set_var unsafe; the tests that use it do not share the variable across threads"
+)]
+
 /// BC-1.7 When `api_key_env` is set, the request carries
 /// `Authorization: Bearer <key>`. When unset, no Authorization header.
 use barry_llm::{Compat, LlmError, LlmEvent, LlmRequest, OpenAiProvider, Provider};
@@ -48,7 +54,10 @@ fn assert_done(events: &[Result<LlmEvent, LlmError>]) {
 
 #[tokio::test]
 async fn bc_1_7_key_set_sends_bearer_header() {
-    std::env::set_var("BARRY_TEST_KEY_A", "sk-test-123");
+    // SAFETY: test-only; no other thread reads or writes the environment here.
+    unsafe {
+        std::env::set_var("BARRY_TEST_KEY_A", "sk-test-123");
+    }
     let (llm, events) = run(
         vec![Reply::Text {
             content: "hi".to_string(),

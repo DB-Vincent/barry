@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-2.10 Headless `barry -p "hi"` prints the final answer to stdout and
 /// exits 0. `--json` prints one valid JSON object per line, ending with
 /// `TurnFinished` and a final `RunSummary`.

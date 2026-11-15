@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// Headless exit codes and the final JSON summary line.
 use barry_testkit::{FakeLlm, Reply};
 
