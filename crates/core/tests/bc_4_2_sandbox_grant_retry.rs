@@ -19,6 +19,7 @@ fn config() -> Config {
         max_turns: 10,
         context_window: 32_768,
         sandbox_network: true,
+        sandbox_unsandboxed: false,
         redact_tool_output: false,
         fs_read_deny: vec![],
         fs_protected: vec![],
@@ -80,13 +81,8 @@ async fn bc_4_2_sandbox_denial_grant_then_retry() {
         },
     ]));
 
-    let mut agent = Agent::new(
-        config(),
-        provider.clone(),
-        approver.clone(),
-        Some(policy(&ws)),
-    )
-    .expect("agent constructs");
+    let mut agent = Agent::new(config(), provider.clone(), approver.clone(), policy(&ws))
+        .expect("agent constructs");
 
     let (tx, _rx) = mpsc::channel(32);
     let stop = agent
@@ -131,13 +127,8 @@ async fn bc_4_2_sandbox_denial_deny_sends_original_failure() {
         },
     ]));
 
-    let mut agent = Agent::new(
-        config(),
-        provider.clone(),
-        approver.clone(),
-        Some(policy(&ws)),
-    )
-    .expect("agent constructs");
+    let mut agent = Agent::new(config(), provider.clone(), approver.clone(), policy(&ws))
+        .expect("agent constructs");
 
     let (tx, _rx) = mpsc::channel(32);
     let stop = agent
@@ -179,13 +170,8 @@ async fn bc_4_2_missing_file_offers_no_grant() {
         },
     ]));
 
-    let mut agent = Agent::new(
-        config(),
-        provider.clone(),
-        approver.clone(),
-        Some(policy(&ws)),
-    )
-    .expect("agent constructs");
+    let mut agent = Agent::new(config(), provider.clone(), approver.clone(), policy(&ws))
+        .expect("agent constructs");
 
     let (tx, _rx) = mpsc::channel(32);
     let stop = agent

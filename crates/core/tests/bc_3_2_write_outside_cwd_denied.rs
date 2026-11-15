@@ -105,6 +105,7 @@ async fn bc_3_2_write_outside_cwd_denied_by_user() {
             max_turns: 10,
             context_window: 32_768,
             sandbox_network: true,
+            sandbox_unsandboxed: false,
             redact_tool_output: false,
             fs_read_deny: vec![],
             fs_protected: vec![],
@@ -113,7 +114,7 @@ async fn bc_3_2_write_outside_cwd_denied_by_user() {
         },
         provider.clone(),
         approver_clone,
-        Some(policy),
+        policy,
     )
     .expect("agent constructs");
 

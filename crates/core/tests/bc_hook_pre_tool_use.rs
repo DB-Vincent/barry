@@ -83,6 +83,7 @@ fn config_with_hooks(hooks: Vec<HookConfig>) -> Config {
         max_turns: 50,
         context_window: 20_000,
         sandbox_network: true,
+        sandbox_unsandboxed: true,
         redact_tool_output: false,
         fs_read_deny: vec![],
         fs_protected: vec![],
@@ -174,8 +175,13 @@ async fn hook_exit_2_blocks_the_tool() {
         done_text("acknowledged"),
     ]));
 
-    let mut agent = Agent::new(config, provider.clone(), Arc::new(AlwaysAllow), None)
-        .expect("agent constructs");
+    let mut agent = Agent::new(
+        config,
+        provider.clone(),
+        Arc::new(AlwaysAllow),
+        permissive_policy(),
+    )
+    .expect("agent constructs");
 
     let (tx, _rx) = mpsc::channel(32);
     agent
@@ -199,8 +205,13 @@ async fn hook_deny_json_blocks_the_tool() {
         done_text("acknowledged"),
     ]));
 
-    let mut agent = Agent::new(config, provider.clone(), Arc::new(AlwaysAllow), None)
-        .expect("agent constructs");
+    let mut agent = Agent::new(
+        config,
+        provider.clone(),
+        Arc::new(AlwaysAllow),
+        permissive_policy(),
+    )
+    .expect("agent constructs");
 
     let (tx, _rx) = mpsc::channel(32);
     agent
@@ -225,8 +236,8 @@ async fn hook_allow_lets_policy_decide() {
         done_text("acknowledged"),
     ]));
 
-    let mut agent =
-        Agent::new(config, provider, Arc::new(AlwaysAllow), None).expect("agent constructs");
+    let mut agent = Agent::new(config, provider, Arc::new(AlwaysAllow), permissive_policy())
+        .expect("agent constructs");
 
     let (tx, _rx) = mpsc::channel(32);
     let result = agent
@@ -267,7 +278,7 @@ async fn hook_updated_input_rewrites_write() {
         config_with_hooks(vec![hook]),
         provider,
         Arc::new(AlwaysAllow),
-        None,
+        permissive_policy(),
     )
     .expect("agent constructs");
 
@@ -319,7 +330,7 @@ async fn hook_updated_input_rewrites_edit() {
         config_with_hooks(vec![hook]),
         provider,
         Arc::new(AlwaysAllow),
-        None,
+        permissive_policy(),
     )
     .expect("agent constructs");
 
@@ -344,8 +355,13 @@ async fn hook_fail_closed_blocks_on_failure() {
         done_tool("bash", json!({ "command": "echo hi" })),
         done_text("acknowledged"),
     ]));
-    let mut agent = Agent::new(config, provider.clone(), Arc::new(AlwaysAllow), None)
-        .expect("agent constructs");
+    let mut agent = Agent::new(
+        config,
+        provider.clone(),
+        Arc::new(AlwaysAllow),
+        permissive_policy(),
+    )
+    .expect("agent constructs");
 
     let (tx, _rx) = mpsc::channel(32);
     agent
@@ -369,8 +385,13 @@ async fn hook_warns_on_failure_when_not_fail_closed() {
         done_tool("bash", json!({ "command": "echo hi" })),
         done_text("acknowledged"),
     ]));
-    let mut agent = Agent::new(config, provider.clone(), Arc::new(AlwaysAllow), None)
-        .expect("agent constructs");
+    let mut agent = Agent::new(
+        config,
+        provider.clone(),
+        Arc::new(AlwaysAllow),
+        permissive_policy(),
+    )
+    .expect("agent constructs");
 
     let (tx, _rx) = mpsc::channel(32);
     agent
@@ -404,8 +425,13 @@ async fn hook_fail_closed_blocks_on_invalid_json() {
         done_tool("bash", json!({ "command": "echo hi" })),
         done_text("acknowledged"),
     ]));
-    let mut agent = Agent::new(config, provider.clone(), Arc::new(AlwaysAllow), None)
-        .expect("agent constructs");
+    let mut agent = Agent::new(
+        config,
+        provider.clone(),
+        Arc::new(AlwaysAllow),
+        permissive_policy(),
+    )
+    .expect("agent constructs");
 
     let (tx, _rx) = mpsc::channel(32);
     agent
@@ -441,8 +467,13 @@ async fn hook_timeout_kills_the_process() {
         done_tool("bash", json!({ "command": "echo hi" })),
         done_text("acknowledged"),
     ]));
-    let mut agent = Agent::new(config, provider.clone(), Arc::new(AlwaysAllow), None)
-        .expect("agent constructs");
+    let mut agent = Agent::new(
+        config,
+        provider.clone(),
+        Arc::new(AlwaysAllow),
+        permissive_policy(),
+    )
+    .expect("agent constructs");
 
     let (tx, _rx) = mpsc::channel(32);
     agent
@@ -485,8 +516,13 @@ async fn hook_ask_is_routed_to_the_approver() {
         done_text("acknowledged"),
     ]));
     let approver = Arc::new(RecordingApprover::new(ApprovalChoice::Deny));
-    let mut agent =
-        Agent::new(config, provider.clone(), approver.clone(), None).expect("agent constructs");
+    let mut agent = Agent::new(
+        config,
+        provider.clone(),
+        approver.clone(),
+        permissive_policy(),
+    )
+    .expect("agent constructs");
 
     let (tx, _rx) = mpsc::channel(32);
     agent
@@ -516,6 +552,22 @@ fn hook_with_empty_command_is_rejected() {
         fail_closed: false,
     }]);
     let provider = Arc::new(RecordingProvider::new(vec![]));
-    let result = Agent::new(config, provider, Arc::new(AlwaysAllow), None);
+    let result = Agent::new(config, provider, Arc::new(AlwaysAllow), permissive_policy());
     assert!(result.is_err(), "an empty hook command must be rejected");
+}
+
+/// A policy with no rules and no read-deny, for tests that cover the turn loop
+/// and the tool plumbing rather than the policy engine (#30). It pre-approves
+/// nothing: a write outside its own cwd goes to the test approver.
+fn permissive_policy() -> barry_policy::Policy {
+    barry_policy::Policy::new(barry_policy::PolicyConfig {
+        cwd: std::env::temp_dir().join("barry-test-policy-cwd"),
+        home: std::env::temp_dir().join("barry-test-policy-home"),
+        extra_writable: vec![],
+        read_deny: vec![],
+        protected: vec![],
+        rules: vec![],
+        network: true,
+    })
+    .expect("policy constructs")
 }

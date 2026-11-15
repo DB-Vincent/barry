@@ -106,6 +106,7 @@ async fn bc_3_5_dangling_symlink_write_does_not_escape_cwd() {
             max_turns: 10,
             context_window: 32_768,
             sandbox_network: true,
+            sandbox_unsandboxed: false,
             redact_tool_output: false,
             fs_read_deny: vec![],
             fs_protected: vec![],
@@ -114,7 +115,7 @@ async fn bc_3_5_dangling_symlink_write_does_not_escape_cwd() {
         },
         provider.clone(),
         approver,
-        Some(policy),
+        policy,
     )
     .expect("agent constructs");
 

@@ -71,6 +71,7 @@ async fn bc_6_4_a_context_that_cannot_shrink_ends_the_turn() {
             max_turns: 50,
             context_window: 20_000,
             sandbox_network: true,
+            sandbox_unsandboxed: true,
             redact_tool_output: false,
             fs_read_deny: vec![],
             fs_protected: vec![],
@@ -79,7 +80,7 @@ async fn bc_6_4_a_context_that_cannot_shrink_ends_the_turn() {
         },
         provider.clone(),
         Arc::new(AlwaysAllow),
-        None,
+        permissive_policy(),
     )
     .expect("agent");
 
@@ -106,4 +107,20 @@ async fn bc_6_4_a_context_that_cannot_shrink_ends_the_turn() {
     }
     assert_eq!(notices, vec!["context full".to_string()], "one notice");
     assert_eq!(finished, Some(StopReason::ContextFull));
+}
+
+/// A policy with no rules and no read-deny, for tests that cover the turn loop
+/// and the tool plumbing rather than the policy engine (#30). It pre-approves
+/// nothing: a write outside its own cwd goes to the test approver.
+fn permissive_policy() -> barry_policy::Policy {
+    barry_policy::Policy::new(barry_policy::PolicyConfig {
+        cwd: std::env::temp_dir().join("barry-test-policy-cwd"),
+        home: std::env::temp_dir().join("barry-test-policy-home"),
+        extra_writable: vec![],
+        read_deny: vec![],
+        protected: vec![],
+        rules: vec![],
+        network: true,
+    })
+    .expect("policy constructs")
 }

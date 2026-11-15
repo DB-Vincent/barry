@@ -88,6 +88,7 @@ async fn bc_6_6_compaction_writes_a_compaction_log_entry() {
         max_turns: 50,
         context_window: 30_000,
         sandbox_network: true,
+        sandbox_unsandboxed: true,
         redact_tool_output: false,
         fs_read_deny: vec![],
         fs_protected: vec![],
@@ -121,9 +122,14 @@ async fn bc_6_6_compaction_writes_a_compaction_log_entry() {
         done_text("fourth done"),
     ]));
 
-    let mut agent = Agent::new(config, provider.clone(), Arc::new(AlwaysAllow), None)
-        .expect("agent constructs")
-        .with_session_log(log);
+    let mut agent = Agent::new(
+        config,
+        provider.clone(),
+        Arc::new(AlwaysAllow),
+        permissive_policy(),
+    )
+    .expect("agent constructs")
+    .with_session_log(log);
 
     for prompt in ["first request", "second request", "third request"] {
         let (tx, _rx) = mpsc::channel(32);
@@ -168,4 +174,20 @@ async fn bc_6_6_compaction_writes_a_compaction_log_entry() {
         log_text.contains("\"type\":\"message\"") && log_text.contains("first request"),
         "raw messages stay in the log: {log_text:.400}"
     );
+}
+
+/// A policy with no rules and no read-deny, for tests that cover the turn loop
+/// and the tool plumbing rather than the policy engine (#30). It pre-approves
+/// nothing: a write outside its own cwd goes to the test approver.
+fn permissive_policy() -> barry_policy::Policy {
+    barry_policy::Policy::new(barry_policy::PolicyConfig {
+        cwd: std::env::temp_dir().join("barry-test-policy-cwd"),
+        home: std::env::temp_dir().join("barry-test-policy-home"),
+        extra_writable: vec![],
+        read_deny: vec![],
+        protected: vec![],
+        rules: vec![],
+        network: true,
+    })
+    .expect("policy constructs")
 }

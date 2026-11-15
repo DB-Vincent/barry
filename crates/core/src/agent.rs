@@ -16,7 +16,7 @@ use crate::hooks::Hook;
 use crate::prompt::{system_prompt, PromptContext};
 use crate::redact::Redactor;
 use crate::session::{self, decided_by_label, decision_label, EntryKind, SessionError, SessionLog};
-use crate::tools::{execute_tool, tool_specs, ToolResult};
+use crate::tools::{execute_tool, tool_specs, ToolContext, ToolResult};
 use crate::{Approver, CoreError};
 
 /// Wraps a tool result for the model (PLAN 5). Kept here rather than in
@@ -74,7 +74,12 @@ pub struct Agent {
     pub(crate) cfg: Config,
     provider: Arc<dyn Provider>,
     pub(crate) approver: Arc<dyn Approver>,
-    policy: Option<Policy>,
+    /// Always present (#30): a missing policy used to mean "unsandboxed bash,
+    /// unrestricted writes", which is not a mode any run should reach by
+    /// accident.
+    policy: Policy,
+    /// `sandbox.unsandboxed = true`: bash runs without the OS sandbox (#30).
+    unsandboxed: bool,
     history: Vec<Message>,
     /// Working directory this agent works in (#28), captured once instead of
     /// asking the process during a turn.
@@ -115,7 +120,7 @@ impl Agent {
         cfg: crate::config::Config,
         provider: Arc<dyn Provider>,
         approver: Arc<dyn Approver>,
-        policy: Option<Policy>,
+        policy: Policy,
     ) -> Result<Self, CoreError> {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let home = std::env::var("HOME")
@@ -129,7 +134,7 @@ impl Agent {
         cfg: crate::config::Config,
         provider: Arc<dyn Provider>,
         approver: Arc<dyn Approver>,
-        policy: Option<Policy>,
+        policy: Policy,
         cwd: PathBuf,
         home: PathBuf,
     ) -> Result<Self, CoreError> {
@@ -151,6 +156,7 @@ impl Agent {
         });
 
         let context_window = cfg.context_window;
+        let unsandboxed = cfg.sandbox_unsandboxed;
         let hooks: Vec<Hook> = cfg
             .hooks
             .iter()
@@ -162,6 +168,7 @@ impl Agent {
             provider,
             approver,
             policy,
+            unsandboxed,
             cwd,
             history: Vec::new(),
             system_prompt,
@@ -184,10 +191,22 @@ impl Agent {
             cwd: self.cwd.display().to_string(),
             model: self.cfg.default_model.clone(),
             barry_version: env!("CARGO_PKG_VERSION").to_string(),
-            policy_sha256: session::policy_fingerprint(self.policy.as_ref()),
+            policy_sha256: session::policy_fingerprint(&self.policy),
         }) {
             self.session_warned = true;
             eprintln!("warning: session log write failed: {err}");
+        }
+        // #30: running without the OS sandbox is a decision, so the audit
+        // trail names it rather than leaving it to be inferred from a missing
+        // policy hash.
+        if self.unsandboxed {
+            eprintln!("warning: sandbox.unsandboxed = true: bash runs without the OS sandbox");
+            if let Err(err) = log.append(EntryKind::Notice {
+                text: "sandbox disabled by config: bash runs without the OS sandbox".to_string(),
+            }) {
+                self.session_warned = true;
+                eprintln!("warning: session log write failed: {err}");
+            }
         }
         self.session = Some(log);
         self
@@ -198,7 +217,7 @@ impl Agent {
         cfg: crate::config::Config,
         provider: Arc<dyn Provider>,
         approver: Arc<dyn Approver>,
-        policy: Option<Policy>,
+        policy: Policy,
         session_file: &Path,
     ) -> Result<Self, CoreError> {
         // Never extend a chain that does not verify: the audit trail is the
@@ -623,17 +642,18 @@ impl Agent {
                                         .map_err(|_| CoreError::ChannelClosed)?;
 
                                     // A tool error is a result, not a turn failure.
-                                    let result = execute_tool(
-                                        call,
-                                        &mut self.policy,
-                                        &self.approver,
-                                        &cancel,
-                                        self.session.as_mut(),
-                                        &self.hooks,
-                                        &self.cwd,
-                                    )
-                                    .await
-                                    .unwrap_or_else(|err| ToolResult::internal_error(&err));
+                                    let mut ctx = ToolContext {
+                                        policy: &mut self.policy,
+                                        unsandboxed: self.unsandboxed,
+                                        approver: &self.approver,
+                                        cancel: &cancel,
+                                        cwd: &self.cwd,
+                                        hooks: &self.hooks,
+                                    };
+                                    let result =
+                                        execute_tool(call, &mut ctx, self.session.as_mut())
+                                            .await
+                                            .unwrap_or_else(|err| ToolResult::internal_error(&err));
 
                                     events
                                         .send(Event::ToolFinished {
@@ -721,10 +741,7 @@ impl Agent {
 
     /// Directories granted this session (PLAN 6.9 `/grants`).
     pub fn grants(&self) -> Vec<std::path::PathBuf> {
-        self.policy
-            .as_ref()
-            .map(|policy| policy.grants().to_vec())
-            .unwrap_or_default()
+        self.policy.grants().to_vec()
     }
 
     /// Replace the provider after `/model` changes the model id. History and

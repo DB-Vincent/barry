@@ -82,7 +82,9 @@ User config is read from the file named by `$BARRY_CONFIG`; when that variable i
 
 ```toml
 [sandbox]
-network = false  # default; true lets sandboxed commands use the network
+network = false     # default; true lets sandboxed commands use the network
+unsandboxed = false # default; true runs bash without the OS sandbox (logged,
+                    # and not recommended: rules and approvals still apply)
 
 [fs]
 # defaults shown; [] opts out of the credential paths

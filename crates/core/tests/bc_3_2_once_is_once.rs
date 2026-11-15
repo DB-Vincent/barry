@@ -82,6 +82,7 @@ fn config() -> Config {
         max_turns: 10,
         context_window: 32_768,
         sandbox_network: true,
+        sandbox_unsandboxed: false,
         redact_tool_output: false,
         fs_read_deny: vec![],
         fs_protected: vec![],
@@ -120,13 +121,8 @@ async fn bc_3_2_once_write_does_not_grant_the_directory() {
         done_text("denied"),
     ]));
 
-    let mut agent = Agent::new(
-        config(),
-        provider.clone(),
-        approver.clone(),
-        Some(policy(&ws)),
-    )
-    .expect("agent constructs");
+    let mut agent = Agent::new(config(), provider.clone(), approver.clone(), policy(&ws))
+        .expect("agent constructs");
 
     let (tx, _rx) = mpsc::channel(32);
     agent
@@ -166,8 +162,8 @@ async fn bc_3_9_once_bash_does_not_grant_the_prefix() {
         done_text("denied"),
     ]));
 
-    let mut agent = Agent::new(config(), provider, approver.clone(), Some(policy(&ws)))
-        .expect("agent constructs");
+    let mut agent =
+        Agent::new(config(), provider, approver.clone(), policy(&ws)).expect("agent constructs");
 
     let (tx, _rx) = mpsc::channel(32);
     agent

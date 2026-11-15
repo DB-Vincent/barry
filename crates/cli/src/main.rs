@@ -359,13 +359,7 @@ async fn run_headless(
                     return ExitCode::from(2);
                 }
             };
-            match Agent::resume(
-                cfg,
-                provider,
-                Arc::new(HeadlessApprover),
-                Some(policy),
-                &path,
-            ) {
+            match Agent::resume(cfg, provider, Arc::new(HeadlessApprover), policy, &path) {
                 Ok(agent) => agent,
                 Err(err) => {
                     eprintln!("{err}");
@@ -374,14 +368,13 @@ async fn run_headless(
             }
         }
         None => {
-            let mut agent =
-                match Agent::new(cfg, provider, Arc::new(HeadlessApprover), Some(policy)) {
-                    Ok(agent) => agent,
-                    Err(err) => {
-                        eprintln!("{err}");
-                        return ExitCode::from(1);
-                    }
-                };
+            let mut agent = match Agent::new(cfg, provider, Arc::new(HeadlessApprover), policy) {
+                Ok(agent) => agent,
+                Err(err) => {
+                    eprintln!("{err}");
+                    return ExitCode::from(1);
+                }
+            };
             // PLAN 6.7: every session is audited. A read-only state directory
             // must not make barry unusable, so a failure only warns.
             match SessionLog::create_default("main") {

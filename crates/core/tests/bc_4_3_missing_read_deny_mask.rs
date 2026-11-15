@@ -25,6 +25,7 @@ fn config() -> Config {
         max_turns: 10,
         context_window: 32_768,
         sandbox_network: true,
+        sandbox_unsandboxed: false,
         redact_tool_output: false,
         fs_read_deny: vec![],
         fs_protected: vec![],
@@ -63,7 +64,7 @@ async fn missing_read_deny_path_is_masked() {
     ]));
     let approver = Arc::new(ScriptedApprover::new(vec![ApprovalChoice::Once]));
     let mut agent =
-        Agent::new(config(), provider.clone(), approver, Some(policy)).expect("agent constructs");
+        Agent::new(config(), provider.clone(), approver, policy).expect("agent constructs");
 
     let (tx, _rx) = mpsc::channel(32);
     agent
