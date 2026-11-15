@@ -194,10 +194,14 @@ fn session_prefix(command: &str) -> Option<Vec<String>> {
 /// Sends SIGKILL to a whole process group. The child is spawned with
 /// `process_group(0)`, so `-<pid>` reaches the shell and everything it started.
 fn kill_process_group(pid: u32) {
-    let _ = std::process::Command::new("kill")
-        .arg("-KILL")
-        .arg(format!("-{pid}"))
-        .output();
+    let Some(pid) = i32::try_from(pid)
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)
+    else {
+        return;
+    };
+    // The group may already be gone; nothing useful to do on failure.
+    let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
 }
 
 /// Returns `true` if a tool result indicates the sandbox blocked the command.
