@@ -165,10 +165,17 @@ async fn bc_2_11_tool_list_is_exact_and_prompt_matches_snapshot() {
 
     let cwd = std::env::current_dir().expect("cwd").display().to_string();
     let date = barry_core::prompt::today();
-    let normalized = first
+    let mut normalized = first
         .replace(&cwd, "[CWD]")
         .replace(&date, "[DATE]")
         .replace(std::env::consts::OS, "[OS]");
-
+    // PLAN 6.3: the AGENTS.md/skills instructions section depends on the
+    // filesystem (git root AGENTS.md, ~/.config/barry/AGENTS.md, skills dirs),
+    // so it is not deterministic for this snapshot test. It is covered
+    // separately by BC-6.1 to BC-6.3. Strip it here so the snapshot captures
+    // only the PLAN 5.2 template.
+    if let Some(pos) = normalized.find("\n# Project instructions") {
+        normalized.truncate(pos);
+    }
     insta::assert_snapshot!(normalized);
 }
