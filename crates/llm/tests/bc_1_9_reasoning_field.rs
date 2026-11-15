@@ -60,6 +60,7 @@ async fn bc_1_9_reasoning_deltas_not_text() {
                 done_message = Some(message);
                 break;
             }
+            _ => {}
         }
     }
 

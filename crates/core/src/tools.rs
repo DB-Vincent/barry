@@ -360,6 +360,23 @@ pub(crate) async fn execute_tool(
                     )
                     .await
                 }
+                // Decision is non-exhaustive: fail closed on a variant this
+                // code does not know.
+                _ => {
+                    record_decision(
+                        &mut log,
+                        call,
+                        &Decision::Deny {
+                            reason: "unknown policy decision".to_string(),
+                        },
+                        &decided_by,
+                    )?;
+                    Ok(ToolResult::new(
+                        false,
+                        "bash denied: unknown policy decision".to_string(),
+                        "bash denied".to_string(),
+                    ))
+                }
             }
         }
         // Advertised (PLAN 5.1, BC-2.11) so the model can see the interface,
@@ -455,6 +472,23 @@ async fn execute_read_with_policy(
                 false,
                 format!("read requires approval: {reason}"),
                 "read requires approval".to_string(),
+            ));
+        }
+        // Decision is non-exhaustive: fail closed on a variant this code does
+        // not know.
+        _ => {
+            record_decision(
+                log,
+                call,
+                &Decision::Deny {
+                    reason: "unknown policy decision".to_string(),
+                },
+                &DecidedBy::Default,
+            )?;
+            return Ok(ToolResult::new(
+                false,
+                "read denied: unknown policy decision".to_string(),
+                "read denied".to_string(),
             ));
         }
     }
@@ -595,6 +629,16 @@ async fn check_write_approval(
                 }
             }
         }
+        // Decision is non-exhaustive: fail closed on a variant this code does
+        // not know.
+        _ => Ok(WriteDecision {
+            allowed: false,
+            decision: Decision::Deny {
+                reason: "unknown policy decision".to_string(),
+            },
+            decided_by: DecidedBy::Default,
+            grant: None,
+        }),
     }
 }
 

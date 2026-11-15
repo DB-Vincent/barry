@@ -498,6 +498,8 @@ impl Agent {
                             _ => return Err(CoreError::Provider("unexpected stop reason".into())),
                         }
                     }
+                    // Unknown event kinds (LlmEvent is non-exhaustive) are ignored.
+                    _ => {}
                 }
 
                 if cancel.is_cancelled() {

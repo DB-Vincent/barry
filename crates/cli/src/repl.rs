@@ -115,6 +115,8 @@ impl Renderer {
             // The approver prints its own prompt.
             Event::ApprovalNeeded(_) => {}
             Event::TurnStarted | Event::TurnFinished { .. } => {}
+            // Event is non-exhaustive: ignore kinds this front end does not know.
+            _ => {}
         }
     }
 

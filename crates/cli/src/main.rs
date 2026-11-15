@@ -202,6 +202,11 @@ fn run_command(command: Commands) -> ExitCode {
                         }
                         ExitCode::from(1)
                     }
+                    // Decision is non-exhaustive: treat an unknown one as a refusal.
+                    _ => {
+                        eprintln!("deny: unknown policy decision");
+                        ExitCode::from(1)
+                    }
                 }
             }
             None => {
@@ -343,5 +348,7 @@ async fn run_headless(
         StopReason::Stop => ExitCode::SUCCESS,
         StopReason::Aborted | StopReason::Error(_) => ExitCode::from(1),
         StopReason::Length | StopReason::ToolCalls | StopReason::ContentFilter => ExitCode::from(1),
+        // StopReason is non-exhaustive: an unknown reason is a failure.
+        _ => ExitCode::from(1),
     }
 }
