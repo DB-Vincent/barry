@@ -1,6 +1,6 @@
 //! The turn loop: request, stream, dispatch tools, feed results back.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use barry_llm::{LlmEvent, LlmRequest, Provider};
@@ -52,13 +52,22 @@ impl Agent {
     ) -> Result<Self, CoreError> {
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         let date = crate::prompt::today();
+
+        // PLAN 6.3: assemble the AGENTS.md and skills sections for the prompt.
+        let git_root = find_git_root(&cwd);
+        let agents_md_section = crate::context::instructions_section(&git_root, &cwd);
+        let global_skills = std::env::var("HOME")
+            .map(|home| PathBuf::from(home).join(".config/barry/skills"))
+            .unwrap_or_else(|_| PathBuf::from(".config/barry/skills"));
+        let project_skills = git_root.join(".barry/skills");
+        let skills_section = crate::context::skills_section(&global_skills, &project_skills);
+
         let system_prompt = system_prompt(&PromptContext {
             cwd: &cwd,
             os: std::env::consts::OS,
             date: &date,
-            // PLAN 6.5 and 6.7 fill these in.
-            agents_md_section: "",
-            skills_section: "",
+            agents_md_section: &agents_md_section,
+            skills_section: &skills_section,
         });
 
         Ok(Self {
@@ -380,4 +389,19 @@ impl Agent {
 
 fn session_error(err: SessionError) -> CoreError {
     CoreError::Session(err.to_string())
+}
+
+/// The nearest ancestor of `cwd` containing a `.git` directory, or `cwd`
+/// itself when there is none (PLAN 6.3).
+fn find_git_root(cwd: &Path) -> PathBuf {
+    let mut path = cwd.to_path_buf();
+    loop {
+        if path.join(".git").is_dir() {
+            return path;
+        }
+        match path.parent() {
+            Some(parent) => path = parent.to_path_buf(),
+            None => return cwd.to_path_buf(),
+        }
+    }
 }

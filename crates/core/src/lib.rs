@@ -14,7 +14,6 @@ pub mod prompt;
 pub mod redact;
 pub mod session;
 pub mod tools;
-
 pub use agent::Agent;
 
 /// A future returned by [`Approver::decide`].
