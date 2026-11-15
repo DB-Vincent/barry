@@ -322,6 +322,8 @@ async fn hook_updated_input_rewrites_edit() {
     };
 
     let provider = Arc::new(RecordingProvider::new(vec![
+        // edit requires a prior read of the file
+        done_tool("read", json!({ "path": file })),
         done_tool(
             "edit",
             json!({ "path": file, "old_string": "missing", "new_string": "x" }),

@@ -12,8 +12,10 @@ mod read;
 mod search;
 mod write;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
+use std::time::SystemTime;
 
 use barry_policy::{Policy, SessionGrants};
 use barry_protocol::{ApprovalChoice, ApprovalRequest, DecidedBy, Decision, ToolCall, ToolSpec};
@@ -86,6 +88,8 @@ pub(crate) struct ToolContext<'a> {
     /// The agent's working directory, not the process's (#28).
     pub cwd: &'a Path,
     pub hooks: &'a [Hook],
+    /// Which files the model has seen, for the `edit` stale check.
+    pub reads: &'a mut ReadState,
 }
 
 /// Everything a tool needs to run one call.
@@ -95,6 +99,7 @@ pub(crate) struct ToolCtx<'a> {
     pub(crate) arguments: serde_json::Value,
     pub(crate) policy: &'a Policy,
     pub(crate) grants: &'a mut SessionGrants,
+    pub(crate) reads: &'a mut ReadState,
     /// `sandbox.unsandboxed = true`: run bash without the OS sandbox.
     pub(crate) unsandboxed: bool,
     pub(crate) approver: &'a Arc<dyn Approver>,
@@ -119,6 +124,59 @@ impl ToolCtx<'_> {
         decided_by: &DecidedBy,
     ) -> Result<(), CoreError> {
         record_decision(&mut self.log, self.call, decision, decided_by)
+    }
+}
+
+/// Modification time and size of a file when the model last saw it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct FileStamp {
+    modified: SystemTime,
+    len: u64,
+}
+
+impl FileStamp {
+    fn of(path: &Path) -> Option<Self> {
+        let meta = std::fs::metadata(path).ok()?;
+        Some(Self {
+            modified: meta.modified().ok()?,
+            len: meta.len(),
+        })
+    }
+}
+
+/// Which files the model has read (or written) and what they looked like then.
+/// `edit` refuses a file it has no record of, or one that changed since.
+#[derive(Default)]
+pub(crate) struct ReadState {
+    seen: HashMap<PathBuf, FileStamp>,
+}
+
+impl ReadState {
+    fn key(path: &Path) -> PathBuf {
+        std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    }
+
+    /// Remember the file as it is on disk now.
+    pub(crate) fn record(&mut self, path: &Path) {
+        if let Some(stamp) = FileStamp::of(path) {
+            self.seen.insert(Self::key(path), stamp);
+        }
+    }
+
+    /// `Err` carries the message for the model when an edit must not proceed.
+    pub(crate) fn check_fresh(&self, path: &Path) -> Result<(), String> {
+        let shown = path.display();
+        let Some(recorded) = self.seen.get(&Self::key(path)) else {
+            return Err(format!(
+                "{shown} has not been read in this session; read it before editing"
+            ));
+        };
+        if FileStamp::of(path) != Some(*recorded) {
+            return Err(format!(
+                "{shown} changed since it was last read; read it again before editing"
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -211,6 +269,7 @@ pub(crate) async fn execute_tool(
         arguments: call.arguments.clone(),
         policy: tcx.policy,
         grants: &mut *tcx.grants,
+        reads: &mut *tcx.reads,
         unsandboxed: tcx.unsandboxed,
         approver: tcx.approver,
         cancel: tcx.cancel,

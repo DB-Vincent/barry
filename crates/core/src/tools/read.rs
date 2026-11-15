@@ -93,7 +93,9 @@ async fn run(mut ctx: ToolCtx<'_>) -> Result<ToolResult, CoreError> {
     if let Some(denied) = read_gate(&mut ctx, "read", &path)? {
         return Ok(denied);
     }
-    read_file(&path).await
+    let result = read_file(&path).await?;
+    ctx.reads.record(Path::new(&path));
+    Ok(result)
 }
 
 /// Read a file with line numbers, buffering a bounded head and tail instead of

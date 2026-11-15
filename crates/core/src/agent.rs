@@ -16,7 +16,7 @@ use crate::hooks::Hook;
 use crate::prompt::{PromptContext, system_prompt};
 use crate::redact::Redactor;
 use crate::session::{self, EntryKind, SessionError, SessionLog, decided_by_label, decision_label};
-use crate::tools::{ToolContext, ToolResult, execute_tool, tool_specs};
+use crate::tools::{ReadState, ToolContext, ToolResult, execute_tool, tool_specs};
 use crate::{Approver, CoreError};
 
 /// Wraps a tool result for the model (PLAN 5). Kept here rather than in
@@ -108,6 +108,8 @@ pub struct Agent {
     redactor: Redactor,
     /// Compiled `PreToolUse` hooks (PLAN 6.5).
     hooks: Vec<Hook>,
+    /// Files the model has read or written, for the `edit` stale check.
+    reads: ReadState,
 }
 
 impl Agent {
@@ -191,6 +193,7 @@ impl Agent {
             session_warned: false,
             redactor: Redactor::from_env(),
             hooks,
+            reads: ReadState::default(),
         })
     }
 
@@ -677,6 +680,7 @@ impl Agent {
                                         cancel: &cancel,
                                         cwd: &self.cwd,
                                         hooks: &self.hooks,
+                                        reads: &mut self.reads,
                                     };
                                     let result =
                                         execute_tool(call, &mut ctx, self.session.as_mut())

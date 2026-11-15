@@ -38,6 +38,8 @@ async fn run(mut ctx: ToolCtx<'_>) -> Result<ToolResult, CoreError> {
     match authorise_write(&mut ctx, "write", &path).await? {
         Ok(target) => {
             write_file(&target, &content).await.map_err(CoreError::Io)?;
+            // The model knows what it wrote, so it may edit the file next.
+            ctx.reads.record(&target);
             Ok(ToolResult::new(
                 true,
                 format!("wrote {} bytes to {}", content.len(), target.display()),
