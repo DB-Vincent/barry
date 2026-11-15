@@ -20,7 +20,7 @@ use futures::future::BoxFuture;
 use tokio_util::sync::CancellationToken;
 
 use crate::hooks::{Hook, HookOutcome};
-use crate::session::{decided_by_label, decision_label, EntryKind, SessionLog};
+use crate::session::{EntryKind, SessionLog, decided_by_label, decision_label};
 use crate::{Approver, CoreError};
 
 /// The result of one tool call, before it becomes a [`barry_protocol::Message::Tool`].

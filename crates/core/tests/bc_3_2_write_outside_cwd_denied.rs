@@ -1,9 +1,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use barry_core::Agent;
 /// BC-3.2 Writing a file outside cwd asks for approval. If the user denies,
 /// the file is not created and the model is told "denied by user".
 use barry_core::config::Config;
-use barry_core::Agent;
 use barry_llm::{LlmEvent, LlmRequest};
 use barry_policy::{Policy, PolicyConfig};
 use barry_protocol::{Message, StopReason};

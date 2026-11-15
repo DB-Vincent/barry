@@ -6,7 +6,7 @@ use serde_json::json;
 
 use std::path::Path;
 
-use super::{authorise_write, Tool, ToolCtx, ToolResult};
+use super::{Tool, ToolCtx, ToolResult, authorise_write};
 use crate::CoreError;
 
 pub(super) struct WriteTool;
@@ -71,10 +71,10 @@ pub(super) async fn write_file(target: &Path, content: &str) -> std::io::Result<
     tokio::fs::write(&tmp, content).await?;
     // Keep the mode of the file being replaced (an edit must not turn 0644
     // into 0600). Symlinks are not followed: `rename` below replaces the link.
-    if let Ok(meta) = tokio::fs::symlink_metadata(target).await {
-        if meta.is_file() {
-            let _ = tokio::fs::set_permissions(&tmp, meta.permissions()).await;
-        }
+    if let Ok(meta) = tokio::fs::symlink_metadata(target).await
+        && meta.is_file()
+    {
+        let _ = tokio::fs::set_permissions(&tmp, meta.permissions()).await;
     }
     if let Err(err) = tokio::fs::rename(&tmp, target).await {
         let _ = tokio::fs::remove_file(&tmp).await;

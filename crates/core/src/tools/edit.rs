@@ -7,7 +7,7 @@ use serde_json::json;
 use std::path::Path;
 
 use super::write::write_file;
-use super::{authorise_write, Tool, ToolCtx, ToolResult};
+use super::{Tool, ToolCtx, ToolResult, authorise_write};
 use crate::CoreError;
 
 pub(super) struct EditTool;

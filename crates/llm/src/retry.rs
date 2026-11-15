@@ -5,8 +5,8 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use time::format_description::well_known::Rfc2822;
 use time::OffsetDateTime;
+use time::format_description::well_known::Rfc2822;
 
 use crate::LlmError;
 
@@ -51,7 +51,7 @@ pub(crate) async fn send_with_retry(
             Err(e) if last_attempt || !e.is_connect() => {
                 return Err(LlmError::Transport {
                     message: e.to_string(),
-                })
+                });
             }
             Err(_) => tokio::time::sleep(backoff(attempt)).await,
         }

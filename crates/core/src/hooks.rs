@@ -13,8 +13,8 @@
 use std::process::Stdio;
 use std::time::Duration;
 
-use crate::config::HookConfig;
 use crate::CoreError;
+use crate::config::HookConfig;
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 

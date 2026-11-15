@@ -194,7 +194,7 @@ impl Config {
                     return Err(invalid(format!(
                         "rule {}: unknown decision {other:?} (expected allow, ask or deny)",
                         rule.id
-                    )))
+                    )));
                 }
             };
             rules.push(BashRule {

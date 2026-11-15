@@ -7,8 +7,8 @@
 //! hook payload carries the cwd.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use barry_core::config::{Config, HookConfig};
 use barry_core::Agent;
+use barry_core::config::{Config, HookConfig};
 use barry_llm::LlmRequest;
 use barry_policy::{Policy, PolicyConfig};
 use barry_testkit::scripted::Reply;

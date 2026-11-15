@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use barry_core::Agent;
 /// Regression test: a dangling symlink inside cwd must not let `write`
 /// escape it.
 ///
@@ -8,7 +9,6 @@
 /// write with no prompt, and `std::fs::write` followed the link to a file
 /// outside cwd.
 use barry_core::config::Config;
-use barry_core::Agent;
 use barry_llm::{LlmEvent, LlmRequest};
 use barry_policy::{Policy, PolicyConfig};
 use barry_protocol::{Message, StopReason};

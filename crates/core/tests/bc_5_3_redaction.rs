@@ -1,11 +1,15 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(
+    unsafe_code,
+    reason = "Rust 2024 makes env::set_var unsafe; the tests that use it do not share the variable across threads"
+)]
 
+use barry_core::Agent;
 /// BC-5.3 When a tool reads a file containing `sk-` followed by 30 chars, or
 /// `FAKE` env secret values, the log shows `[REDACTED]`, never the secret.
 /// The model still receives the real content.
 use barry_core::config::Config;
 use barry_core::session::SessionLog;
-use barry_core::Agent;
 use barry_policy::{Policy, PolicyConfig};
 use barry_testkit::scripted::Reply;
 use barry_testkit::{ScriptedApprover, ScriptedProvider, Workspace};
@@ -48,7 +52,9 @@ fn policy(ws: &Workspace) -> Policy {
 #[tokio::test]
 async fn bc_5_3_secrets_are_redacted_in_the_log_only() {
     // The redactor snapshots secret env values when the log is created.
-    std::env::set_var("BARRY_TEST_SECRET_TOKEN", ENV_SECRET);
+    unsafe {
+        std::env::set_var("BARRY_TEST_SECRET_TOKEN", ENV_SECRET);
+    }
 
     let ws = Workspace::new();
     let contents = format!("api_key = {SECRET}\ntoken = {ENV_SECRET}\n");
@@ -83,7 +89,9 @@ async fn bc_5_3_secrets_are_redacted_in_the_log_only() {
         .await
         .expect("turn completes");
 
-    std::env::remove_var("BARRY_TEST_SECRET_TOKEN");
+    unsafe {
+        std::env::remove_var("BARRY_TEST_SECRET_TOKEN");
+    }
 
     let log_text = std::fs::read_to_string(&log_path).expect("read log");
     assert!(

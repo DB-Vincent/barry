@@ -11,7 +11,7 @@ use std::collections::VecDeque;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 
-use crate::context::truncate::{truncation_marker, HEAD_BYTES, TAIL_BYTES};
+use crate::context::truncate::{HEAD_BYTES, TAIL_BYTES, truncation_marker};
 
 /// Files up to this size are read whole. The numbered output of a larger file
 /// is always truncated, so buffering more would only cost memory.

@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use barry_core::Agent;
 /// Regression test: "once" is once.
 ///
 /// Both the bash and the write approval paths used to treat `Once` exactly
@@ -7,7 +8,6 @@
 /// grant. One approved command then silently approved every later command
 /// with the same first word, and one approved write opened a whole directory.
 use barry_core::config::Config;
-use barry_core::Agent;
 use barry_llm::{LlmEvent, LlmRequest};
 use barry_policy::{Policy, PolicyConfig};
 use barry_protocol::{ApprovalChoice, Message, StopReason};

@@ -10,10 +10,10 @@ use serde_json::json;
 use tokio::io::AsyncReadExt;
 use tokio_util::sync::CancellationToken;
 
-use super::{record_decision, record_grant, record_prefix, Tool, ToolCtx, ToolResult};
-use crate::bounded::{StreamCapture, STREAM_LIMIT};
-use crate::session::SessionLog;
+use super::{Tool, ToolCtx, ToolResult, record_decision, record_grant, record_prefix};
 use crate::CoreError;
+use crate::bounded::{STREAM_LIMIT, StreamCapture};
+use crate::session::SessionLog;
 
 pub(super) struct BashTool;
 

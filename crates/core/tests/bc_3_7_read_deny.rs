@@ -1,10 +1,10 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use barry_core::Agent;
 /// BC-3.7 Reading `~/.ssh/id_test` is refused without a prompt, and the
 /// model never receives `FAKE-PRIVATE-KEY`. Reading a normal file outside
 /// cwd is allowed.
 use barry_core::config::Config;
-use barry_core::Agent;
 use barry_llm::{LlmEvent, LlmRequest};
 use barry_policy::{Policy, PolicyConfig};
 use barry_protocol::{Message, StopReason};

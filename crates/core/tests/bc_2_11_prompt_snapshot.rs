@@ -1,4 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(
+    unsafe_code,
+    reason = "Rust 2024 makes env::set_var unsafe; the tests that use it do not share the variable across threads"
+)]
 
 /// BC-2.11 The tool list sent to the model contains exactly
 /// `read, write, edit, bash` — the agent tool stays hidden until sub-agents
@@ -115,7 +119,10 @@ async fn bc_2_11_tool_list_is_exact_and_prompt_matches_snapshot() {
     let home = tempfile::tempdir().unwrap();
     let mut agent = {
         let _guard = HOME_LOCK.lock().unwrap();
-        std::env::set_var("HOME", home.path());
+        // SAFETY: test-only; no other thread reads or writes the environment here.
+        unsafe {
+            std::env::set_var("HOME", home.path());
+        }
         let agent = Agent::new(
             Config {
                 default_model: "test".to_string(),
@@ -134,7 +141,10 @@ async fn bc_2_11_tool_list_is_exact_and_prompt_matches_snapshot() {
             permissive_policy(),
         )
         .expect("agent constructs");
-        std::env::remove_var("HOME");
+        // SAFETY: test-only; no other thread reads or writes the environment here.
+        unsafe {
+            std::env::remove_var("HOME");
+        }
         agent
     };
 

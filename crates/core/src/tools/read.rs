@@ -6,8 +6,8 @@ use serde_json::json;
 use std::path::Path;
 
 use super::{Tool, ToolCtx, ToolResult};
-use crate::bounded::{read_numbered, ReadError};
 use crate::CoreError;
+use crate::bounded::{ReadError, read_numbered};
 
 pub(super) struct ReadTool;
 

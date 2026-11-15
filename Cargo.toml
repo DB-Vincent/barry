@@ -12,12 +12,14 @@ members = [
 
 [workspace.package]
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license = "MIT"
 rust-version = "1.89"
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+# deny, not forbid: Rust 2024 makes env::set_var unsafe, and a few tests need it
+# (each carries an allow with a reason). Non-test code has no unsafe.
+unsafe_code = "deny"
 
 [workspace.lints.clippy]
 unwrap_used = "warn"

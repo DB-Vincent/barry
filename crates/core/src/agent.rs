@@ -13,10 +13,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
 use crate::hooks::Hook;
-use crate::prompt::{system_prompt, PromptContext};
+use crate::prompt::{PromptContext, system_prompt};
 use crate::redact::Redactor;
-use crate::session::{self, decided_by_label, decision_label, EntryKind, SessionError, SessionLog};
-use crate::tools::{execute_tool, tool_specs, ToolContext, ToolResult};
+use crate::session::{self, EntryKind, SessionError, SessionLog, decided_by_label, decision_label};
+use crate::tools::{ToolContext, ToolResult, execute_tool, tool_specs};
 use crate::{Approver, CoreError};
 
 /// Wraps a tool result for the model (PLAN 5). Kept here rather than in
@@ -31,10 +31,10 @@ fn wrap_tool_output(tool: &str, ok: bool, content: &str) -> String {
 /// buries the rest of the session; the path is what the user needs to see. The
 /// other tools keep their arguments, which are short.
 fn tool_display(call: &ToolCall) -> String {
-    if matches!(call.name.as_str(), "write" | "edit") {
-        if let Some(path) = call.arguments.get("path").and_then(|p| p.as_str()) {
-            return format!("{} {path}", call.name);
-        }
+    if matches!(call.name.as_str(), "write" | "edit")
+        && let Some(path) = call.arguments.get("path").and_then(|p| p.as_str())
+    {
+        return format!("{} {path}", call.name);
     }
     format!("{} {}", call.name, call.arguments)
 }
@@ -244,11 +244,11 @@ impl Agent {
         let Some(session) = self.session.as_mut() else {
             return;
         };
-        if let Err(err) = session.append(kind) {
-            if !self.session_warned {
-                self.session_warned = true;
-                eprintln!("warning: session log write failed: {err}");
-            }
+        if let Err(err) = session.append(kind)
+            && !self.session_warned
+        {
+            self.session_warned = true;
+            eprintln!("warning: session log write failed: {err}");
         }
     }
 

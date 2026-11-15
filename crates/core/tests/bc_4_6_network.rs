@@ -1,9 +1,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use barry_core::Agent;
 /// BC-4.6 With `network = true`, bash can reach a local HTTP server. With
 /// `network = false` it cannot.
 use barry_core::config::Config;
-use barry_core::Agent;
 use barry_llm::LlmRequest;
 use barry_policy::{Policy, PolicyConfig};
 use barry_protocol::{ApprovalChoice, Message, StopReason};

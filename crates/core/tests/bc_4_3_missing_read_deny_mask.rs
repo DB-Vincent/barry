@@ -9,8 +9,8 @@
 #![cfg(target_os = "linux")]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use barry_core::config::Config;
 use barry_core::Agent;
+use barry_core::config::Config;
 use barry_policy::{Policy, PolicyConfig};
 use barry_protocol::ApprovalChoice;
 use barry_testkit::scripted::Reply;
