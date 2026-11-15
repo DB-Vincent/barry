@@ -417,6 +417,7 @@ pub(crate) fn decision_label(decision: &Decision) -> String {
         Decision::Allow => "allow".to_string(),
         Decision::Ask { reason } => format!("ask: {reason}"),
         Decision::Deny { reason } => format!("deny: {reason}"),
+        _ => "unknown".to_string(),
     }
 }
 
@@ -427,6 +428,7 @@ pub(crate) fn decided_by_label(decided_by: &DecidedBy) -> String {
         DecidedBy::User => "user".to_string(),
         DecidedBy::Hook(id) => format!("hook:{id}"),
         DecidedBy::Default => "default".to_string(),
+        _ => "unknown".to_string(),
     }
 }
 

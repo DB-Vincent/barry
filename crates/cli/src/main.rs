@@ -219,6 +219,11 @@ fn run_command(command: Commands, cfg: &Config) -> ExitCode {
                         }
                         ExitCode::from(1)
                     }
+                    // Decision is non-exhaustive: treat an unknown one as a refusal.
+                    _ => {
+                        eprintln!("deny: unknown policy decision");
+                        ExitCode::from(1)
+                    }
                 }
             }
             None => {
@@ -302,6 +307,8 @@ fn decision_name(decision: &barry_protocol::Decision) -> &'static str {
         barry_protocol::Decision::Allow => "allow",
         barry_protocol::Decision::Deny { .. } => "deny",
         barry_protocol::Decision::Ask { .. } => "ask",
+        // Decision is non-exhaustive: label a variant this code does not know.
+        _ => "unknown",
     }
 }
 
@@ -438,5 +445,7 @@ async fn run_headless(
         // is reported like an abort rather than a success.
         StopReason::Aborted | StopReason::ContextFull | StopReason::Error(_) => ExitCode::from(1),
         StopReason::Length | StopReason::ToolCalls | StopReason::ContentFilter => ExitCode::from(1),
+        // StopReason is non-exhaustive: an unknown reason is a failure.
+        _ => ExitCode::from(1),
     }
 }

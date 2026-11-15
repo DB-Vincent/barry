@@ -165,6 +165,23 @@ async fn run(ctx: ToolCtx<'_>) -> Result<ToolResult, CoreError> {
             )
             .await
         }
+        // Decision is non-exhaustive: fail closed on a variant this code does
+        // not know.
+        _ => {
+            record_decision(
+                &mut log,
+                call,
+                &Decision::Deny {
+                    reason: "unknown policy decision".to_string(),
+                },
+                &decided_by,
+            )?;
+            Ok(ToolResult::new(
+                false,
+                "bash denied: unknown policy decision".to_string(),
+                "bash denied".to_string(),
+            ))
+        }
     }
 }
 

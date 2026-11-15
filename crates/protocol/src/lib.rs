@@ -52,6 +52,7 @@ pub struct ToolSpec {
 
 /// Why the model stopped generating.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[non_exhaustive]
 pub enum StopReason {
     Stop,
     Length,
@@ -73,6 +74,7 @@ pub struct Usage {
 
 /// The policy decision for a tool or command.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[non_exhaustive]
 pub enum Decision {
     Allow,
     Ask { reason: String },
@@ -81,6 +83,7 @@ pub enum Decision {
 
 /// Who made the decision.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[non_exhaustive]
 pub enum DecidedBy {
     Rule(String),
     User,
@@ -108,6 +111,7 @@ pub struct ApprovalRequest {
 
 /// Events emitted by the core agent loop to the front end.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[non_exhaustive]
 pub enum Event {
     TurnStarted,
     TextDelta(String),

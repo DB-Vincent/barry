@@ -15,6 +15,7 @@ pub struct LlmRequest {
 
 /// An event from a streaming LLM response.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum LlmEvent {
     TextDelta(String),
     ReasoningDelta(String),
@@ -27,6 +28,7 @@ pub enum LlmEvent {
 
 /// Errors from the LLM provider.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum LlmError {
     #[error("auth error for provider {provider}")]
     Auth { provider: String },

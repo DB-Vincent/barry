@@ -401,6 +401,16 @@ pub(crate) async fn check_write_approval(
                 }
             }
         }
+        // Decision is non-exhaustive: fail closed on a variant this code does
+        // not know.
+        _ => Ok(WriteDecision {
+            allowed: false,
+            decision: Decision::Deny {
+                reason: "unknown policy decision".to_string(),
+            },
+            decided_by: DecidedBy::Default,
+            grant: None,
+        }),
     }
 }
 

@@ -65,6 +65,21 @@ async fn run(mut ctx: ToolCtx<'_>) -> Result<ToolResult, CoreError> {
                 "read requires approval".to_string(),
             ));
         }
+        // Decision is non-exhaustive: fail closed on a variant this code does
+        // not know.
+        _ => {
+            ctx.record_decision(
+                &Decision::Deny {
+                    reason: "unknown policy decision".to_string(),
+                },
+                &DecidedBy::Default,
+            )?;
+            return Ok(ToolResult::new(
+                false,
+                "read denied: unknown policy decision".to_string(),
+                "read denied".to_string(),
+            ));
+        }
     }
 
     read_file(&path).await
