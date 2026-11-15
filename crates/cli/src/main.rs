@@ -341,7 +341,9 @@ async fn run_headless(
     match stop {
         StopReason::Stop if turn_limited => ExitCode::from(3),
         StopReason::Stop => ExitCode::SUCCESS,
-        StopReason::Aborted | StopReason::Error(_) => ExitCode::from(1),
+        // A turn stopped for lack of context did not answer the request, so it
+        // is reported like an abort rather than a success.
+        StopReason::Aborted | StopReason::ContextFull | StopReason::Error(_) => ExitCode::from(1),
         StopReason::Length | StopReason::ToolCalls | StopReason::ContentFilter => ExitCode::from(1),
     }
 }

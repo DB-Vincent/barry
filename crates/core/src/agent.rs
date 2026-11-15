@@ -38,6 +38,17 @@ const KEEP_RECENT_TURNS: usize = 2;
 /// Compactions allowed in one `run_turn` (PLAN 6.4).
 const MAX_COMPACTIONS_PER_TURN: u64 = 3;
 
+/// What `maybe_compact` did to the context.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompactOutcome {
+    /// The estimate is under the threshold; nothing to do.
+    Fits,
+    /// The history was reduced and the request can be sent.
+    Compacted,
+    /// The context is over the threshold and cannot be reduced any further.
+    ContextFull,
+}
+
 /// The main agent that drives the turn loop.
 ///
 /// `history` outlives a single turn: the M2 REPL and BC-2.9 both need the
@@ -240,36 +251,38 @@ impl Agent {
     }
 
     /// Run compaction before building an LLM request (PLAN 6.4).
-    /// Returns `true` if the context was reduced.
+    ///
+    /// Order matters: clearing old tool output is free, a summarisation request
+    /// costs a model round trip, and once neither can bring the estimate under
+    /// the threshold the turn must stop rather than send a request that will
+    /// overflow (#22).
     async fn maybe_compact(
         &mut self,
-        events: &mut mpsc::Sender<Event>,
         cancel: &CancellationToken,
-    ) -> Result<bool, CoreError> {
+    ) -> Result<CompactOutcome, CoreError> {
         if self.estimate_tokens() <= self.compaction_threshold() {
-            return Ok(false);
+            return Ok(CompactOutcome::Fits);
         }
 
         // Step 1: clear old tool outputs.
         self.clear_old_tool_outputs();
         if self.estimate_tokens() <= self.compaction_threshold() {
-            return Ok(true);
+            return Ok(CompactOutcome::Compacted);
         }
 
         // Steps 2-3: summarise, but only what is older than the turns the
         // model still needs (#21).
         if self.compactions >= MAX_COMPACTIONS_PER_TURN {
-            events
-                .send(Event::Notice("context full".to_string()))
-                .await
-                .map_err(|_| CoreError::ChannelClosed)?;
-            return Ok(false);
+            return Ok(CompactOutcome::ContextFull);
         }
         if self.summarise(KEEP_RECENT_TURNS, cancel).await? {
             self.compactions += 1;
-            return Ok(true);
+            Ok(CompactOutcome::Compacted)
+        } else {
+            // Nothing old enough to summarise, or no summary came back: there
+            // is no safe way to shrink the context further.
+            Ok(CompactOutcome::ContextFull)
         }
-        Ok(false)
     }
 
     /// Where the summarised region ends: the index of the `keep_turns`-th most
@@ -402,8 +415,25 @@ impl Agent {
                 .await
                 .map_err(|_| CoreError::ChannelClosed)?;
 
-            // PLAN 6.4: compact the context before building the request.
-            self.maybe_compact(&mut events, &cancel).await?;
+            // PLAN 6.4: compact the context before building the request. A
+            // context that cannot be reduced stops the turn here: sending the
+            // request would only overflow (#22).
+            if self.maybe_compact(&cancel).await? == CompactOutcome::ContextFull {
+                let notice = "context full".to_string();
+                events
+                    .send(Event::Notice(notice.clone()))
+                    .await
+                    .map_err(|_| CoreError::ChannelClosed)?;
+                self.log(EntryKind::Notice { text: notice });
+                events
+                    .send(Event::TurnFinished {
+                        stop: StopReason::ContextFull,
+                        usage: None,
+                    })
+                    .await
+                    .map_err(|_| CoreError::ChannelClosed)?;
+                return Ok(StopReason::ContextFull);
+            }
 
             let mut messages = Vec::with_capacity(self.history.len() + 1);
             messages.push(Message::System {
