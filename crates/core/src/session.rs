@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use barry_policy::Policy;
 use barry_protocol::{DecidedBy, Decision, Message};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
@@ -42,6 +42,12 @@ pub enum SessionError {
     },
     #[error("session log format error: {0}")]
     Format(String),
+    #[error("session log format error: {context}: {source}")]
+    Json {
+        context: String,
+        #[source]
+        source: serde_json::Error,
+    },
 }
 
 /// One audit entry, minus the envelope fields (`seq`, `ts`, `prev`, ...).
@@ -127,6 +133,10 @@ pub struct SessionLog {
 impl SessionLog {
     /// Create a new log file inside `dir`. The directory is `0700` and the
     /// file `0600` (BC-5.4).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionError::Io`] if the directory or file cannot be created.
     pub fn create_in(dir: &Path, agent_id: &str) -> Result<Self, SessionError> {
         create_private_dir(dir)?;
         let name = format!("{}-{}.jsonl", timestamp_for_name(), uuid::Uuid::new_v4());
@@ -143,11 +153,20 @@ impl SessionLog {
     }
 
     /// Create a log under `$XDG_STATE_HOME` (or `~/.local/state`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionError::Io`] if the directory or file cannot be created.
     pub fn create_default(agent_id: &str) -> Result<Self, SessionError> {
         Self::create_in(&default_session_dir(), agent_id)
     }
 
     /// Open an existing log and continue its chain. Used by `--resume`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionError`] if the file cannot be read or its last entry
+    /// cannot be parsed.
     pub fn open_append(path: &Path) -> Result<Self, SessionError> {
         let content = fs::read_to_string(path).map_err(|source| SessionError::Io {
             path: path.display().to_string(),
@@ -158,8 +177,10 @@ impl SessionLog {
         let mut prev = ZERO_HASH.to_string();
         let mut agent_id = "main".to_string();
         if let Some(last) = content.split('\n').rfind(|line| !line.is_empty()) {
-            let entry: Entry = serde_json::from_str(last)
-                .map_err(|err| SessionError::Format(format!("last line: {err}")))?;
+            let entry: Entry = serde_json::from_str(last).map_err(|source| SessionError::Json {
+                context: "last line".into(),
+                source,
+            })?;
             next_seq = entry.seq + 1;
             prev = sha256_hex(last.as_bytes());
             agent_id = entry.agent_id;
@@ -177,14 +198,22 @@ impl SessionLog {
     }
 
     /// The file this log writes to.
+    #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }
 
     /// Append one entry, redact it, hash-chain it, and fsync.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionError`] if the entry cannot be serialised or the write
+    /// or flush fails.
     pub fn append(&mut self, kind: EntryKind) -> Result<(), SessionError> {
-        let mut value =
-            serde_json::to_value(&kind).map_err(|err| SessionError::Format(err.to_string()))?;
+        let mut value = serde_json::to_value(&kind).map_err(|source| SessionError::Json {
+            context: "serialize entry".into(),
+            source,
+        })?;
         let object = value
             .as_object_mut()
             .ok_or_else(|| SessionError::Format("entry is not a JSON object".into()))?;
@@ -196,8 +225,10 @@ impl SessionLog {
         // Redact before hashing and writing (PLAN 6.7).
         self.redactor.redact_value(&mut value);
 
-        let body =
-            serde_json::to_string(&value).map_err(|err| SessionError::Format(err.to_string()))?;
+        let body = serde_json::to_string(&value).map_err(|source| SessionError::Json {
+            context: "serialize entry".into(),
+            source,
+        })?;
         // The self hash covers the line up to the `,"hash"` suffix, so
         // `verify` can recompute it from the bytes that precede the suffix.
         let prefix = &body[..body.len() - 1];
@@ -226,6 +257,11 @@ impl SessionLog {
 }
 
 /// Verify the hash chain of a log file.
+///
+/// # Errors
+///
+/// Returns [`SessionError::Io`] if the file cannot be read. A broken chain is
+/// reported in the [`VerifyReport`], not as an error.
 pub fn verify(path: &Path) -> Result<VerifyReport, SessionError> {
     let content = fs::read_to_string(path).map_err(|source| SessionError::Io {
         path: path.display().to_string(),
@@ -284,8 +320,10 @@ pub(crate) fn replay_history(path: &Path) -> Result<Vec<Message>, SessionError> 
         .filter(|line| !line.is_empty())
         .enumerate()
     {
-        let entry: Entry = serde_json::from_str(line)
-            .map_err(|err| SessionError::Format(format!("line {}: {err}", index + 1)))?;
+        let entry: Entry = serde_json::from_str(line).map_err(|source| SessionError::Json {
+            context: format!("line {}", index + 1),
+            source,
+        })?;
         match entry.kind {
             EntryKind::Message { message } => {
                 if !matches!(message, Message::System { .. }) {
@@ -322,6 +360,11 @@ pub fn default_session_dir() -> PathBuf {
 /// fragment (timestamp or UUID prefix) inside the default session directory.
 ///
 /// An ambiguous prefix is an error rather than an arbitrary pick.
+///
+/// # Errors
+///
+/// Returns [`SessionError`] if no session matches `spec`, or more than one
+/// does.
 pub fn resolve_session(spec: &str) -> Result<PathBuf, SessionError> {
     let direct = PathBuf::from(spec);
     if direct.is_file() {
@@ -351,7 +394,7 @@ pub fn resolve_session(spec: &str) -> Result<PathBuf, SessionError> {
 }
 
 /// A stable fingerprint of the effective policy, for `session_start`.
-pub(crate) fn policy_fingerprint(policy: Option<&Policy>) -> String {
+pub(crate) fn policy_fingerprint(policy: &Policy) -> String {
     /// Hash one field with its length, so concatenated values cannot collide.
     fn field(hasher: &mut Sha256, bytes: &[u8]) {
         hasher.update((bytes.len() as u64).to_le_bytes());
@@ -360,30 +403,22 @@ pub(crate) fn policy_fingerprint(policy: Option<&Policy>) -> String {
 
     let mut hasher = Sha256::new();
     field(&mut hasher, b"barry-policy-v1");
-    match policy {
-        None => field(&mut hasher, b"no-policy"),
-        Some(policy) => {
-            field(&mut hasher, policy.cwd().display().to_string().as_bytes());
-            for path in policy.writable_roots() {
-                field(&mut hasher, path.display().to_string().as_bytes());
-            }
-            for path in policy.grants() {
-                field(&mut hasher, path.display().to_string().as_bytes());
-            }
-            for path in policy.read_deny_paths() {
-                field(&mut hasher, path.display().to_string().as_bytes());
-            }
-            for component in policy.protected() {
-                field(&mut hasher, component.as_bytes());
-            }
-            for rule in policy.rules() {
-                field(&mut hasher, rule.id.as_bytes());
-                field(&mut hasher, rule.r#match.as_bytes());
-                field(&mut hasher, format!("{:?}", rule.decision).as_bytes());
-            }
-            field(&mut hasher, &[u8::from(policy.network())]);
-        }
+    field(&mut hasher, policy.cwd().display().to_string().as_bytes());
+    for path in policy.writable_roots() {
+        field(&mut hasher, path.display().to_string().as_bytes());
     }
+    for path in policy.read_deny_paths() {
+        field(&mut hasher, path.display().to_string().as_bytes());
+    }
+    for component in policy.protected() {
+        field(&mut hasher, component.as_bytes());
+    }
+    for rule in policy.rules() {
+        field(&mut hasher, rule.id.as_bytes());
+        field(&mut hasher, rule.r#match.as_bytes());
+        field(&mut hasher, format!("{:?}", rule.decision).as_bytes());
+    }
+    field(&mut hasher, &[u8::from(policy.network())]);
     hex_digest(hasher.finalize())
 }
 
@@ -393,6 +428,7 @@ pub(crate) fn decision_label(decision: &Decision) -> String {
         Decision::Allow => "allow".to_string(),
         Decision::Ask { reason } => format!("ask: {reason}"),
         Decision::Deny { reason } => format!("deny: {reason}"),
+        _ => "unknown".to_string(),
     }
 }
 
@@ -403,6 +439,7 @@ pub(crate) fn decided_by_label(decided_by: &DecidedBy) -> String {
         DecidedBy::User => "user".to_string(),
         DecidedBy::Hook(id) => format!("hook:{id}"),
         DecidedBy::Default => "default".to_string(),
+        _ => "unknown".to_string(),
     }
 }
 

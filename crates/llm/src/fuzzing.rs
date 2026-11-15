@@ -2,8 +2,8 @@
 
 use serde_json::Value;
 
-use crate::sse::{parse_event_block, SseEvent, SseParser, StreamState};
 use crate::LlmEvent;
+use crate::sse::{SseEvent, SseParser, StreamState, parse_event_block};
 
 /// Run a response body, delivered as `reads`, through the SSE parser and the
 /// stream state, the way the OpenAI provider does. Returns the final event.

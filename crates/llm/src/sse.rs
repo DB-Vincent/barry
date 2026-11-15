@@ -154,20 +154,19 @@ impl StreamState {
         };
 
         if let Some(delta) = choice.get("delta") {
-            if let Some(content) = delta.get("content").and_then(Value::as_str) {
-                if !content.is_empty() {
-                    self.text.push_str(content);
-                    events.push(LlmEvent::TextDelta(content.to_string()));
-                }
+            if let Some(content) = delta.get("content").and_then(Value::as_str)
+                && !content.is_empty()
+            {
+                self.text.push_str(content);
+                events.push(LlmEvent::TextDelta(content.to_string()));
             }
 
-            if let Some(field) = reasoning_field {
-                if let Some(reasoning) = delta.get(field).and_then(Value::as_str) {
-                    if !reasoning.is_empty() {
-                        self.reasoning.push_str(reasoning);
-                        events.push(LlmEvent::ReasoningDelta(reasoning.to_string()));
-                    }
-                }
+            if let Some(field) = reasoning_field
+                && let Some(reasoning) = delta.get(field).and_then(Value::as_str)
+                && !reasoning.is_empty()
+            {
+                self.reasoning.push_str(reasoning);
+                events.push(LlmEvent::ReasoningDelta(reasoning.to_string()));
             }
 
             if let Some(tool_calls) = delta.get("tool_calls").and_then(Value::as_array) {
@@ -177,10 +176,10 @@ impl StreamState {
             }
         }
 
-        if let Some(reason) = choice.get("finish_reason").and_then(Value::as_str) {
-            if let Some(stop) = map_finish_reason(reason) {
-                self.stop = Some(stop);
-            }
+        if let Some(reason) = choice.get("finish_reason").and_then(Value::as_str)
+            && let Some(stop) = map_finish_reason(reason)
+        {
+            self.stop = Some(stop);
         }
 
         events

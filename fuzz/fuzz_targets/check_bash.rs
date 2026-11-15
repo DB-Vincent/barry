@@ -2,7 +2,7 @@
 //! a command that starts with an explicitly denied one must stay denied.
 #![no_main]
 
-use barry_policy::{Decision, Policy, PolicyConfig};
+use barry_policy::{Decision, Policy, PolicyConfig, SessionGrants};
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|command: &str| {
@@ -18,7 +18,11 @@ fuzz_target!(|command: &str| {
     })
     .expect("a policy without rules is valid");
 
-    let _ = policy.check_bash(command);
+    let grants = SessionGrants::new();
+    let _ = policy.check_bash(command, &grants);
     let denied = format!("sudo {command}");
-    assert!(matches!(policy.check_bash(&denied).0, Decision::Deny { .. }));
+    assert!(matches!(
+        policy.check_bash(&denied, &grants).0,
+        Decision::Deny { .. }
+    ));
 });

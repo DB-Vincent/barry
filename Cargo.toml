@@ -10,26 +10,69 @@ members = [
     "crates/testkit",
 ]
 
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.89"
+
+[workspace.lints.rust]
+# deny, not forbid: Rust 2024 makes env::set_var unsafe, and a few tests need it
+# (each carries an allow with a reason). Non-test code has no unsafe.
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+pedantic = { level = "warn", priority = -1 }
+
+# Pedantic lints that already fire on existing code. Allowed so CI stays green
+# under -D warnings; remove entries as the code is cleaned up.
+case_sensitive_file_extension_comparisons = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+explicit_iter_loop = "allow"
+format_collect = "allow"
+ignored_unit_patterns = "allow"
+items_after_statements = "allow"
+large_futures = "allow"
+large_stack_arrays = "allow"
+manual_string_new = "allow"
+match_same_arms = "allow"
+match_wildcard_for_single_variants = "allow"
+naive_bytecount = "allow"
+needless_pass_by_value = "allow"
+ref_option = "allow"
+single_match_else = "allow"
+too_many_lines = "allow"
+unnecessary_wraps = "allow"
+unnested_or_patterns = "allow"
+unused_async = "allow"
+unused_self = "allow"
+
 [workspace.dependencies]
-clap = { version = "=4.6.7", features = ["derive"] }
-serde = { version = "=1.0.229", features = ["derive"] }
-serde_json = { version = "=1.0.154" }
-tokio = { version = "=1.54.1", features = ["rt-multi-thread", "macros", "process", "signal", "time", "sync"] }
-toml = { version = "=1.2.1" }
-thiserror = { version = "=2.0.21" }
-tempfile = { version = "=3.27.0" }
-bytes = { version = "=1.10.0" }
-futures = { version = "=0.3.34" }
-url = { version = "=2.5.8" }
-tokio-util = { version = "=0.7.20" }
-reqwest = { version = "=0.13.5", default-features = false, features = ["rustls", "stream", "json"] }
-time = { version = "=0.3.55", features = ["formatting"] }
-sha2 = { version = "=0.11.1" }
-regex = { version = "=1.13.1" }
-uuid = { version = "=1.29.2", features = ["v4"] }
-rustyline = { version = "=19.0.0" }
-libc = { version = "=0.2.191" }
-seccompiler = { version = "=0.5.0" }
+clap = { version = "4.6.7", features = ["derive"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.154" }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "process", "signal", "time", "sync"] }
+toml = { version = "1.2.1" }
+thiserror = { version = "2.0.21" }
+tempfile = { version = "3.27.0" }
+tree-sitter = { version = "0.27.2" }
+tree-sitter-bash = { version = "0.25.1" }
+bytes = { version = "1.11.1" }
+futures = { version = "0.3.34" }
+url = { version = "2.5.8" }
+tokio-util = { version = "0.7.20" }
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "stream", "json"] }
+time = { version = "0.3.55", features = ["formatting", "parsing"] }
+sha2 = { version = "0.11.1" }
+regex = { version = "1.13.1" }
+uuid = { version = "1.29.2", features = ["v4"] }
+rustyline = { version = "19.0.0" }
+libc = { version = "0.2.191" }
+rustix = { version = "1.1.6", default-features = false, features = ["std", "process"] }
+seccompiler = { version = "0.5.0" }
 barry-protocol = { path = "crates/protocol" }
 barry-llm = { path = "crates/llm" }
 barry-policy = { path = "crates/policy" }
@@ -38,11 +81,11 @@ barry-core = { path = "crates/core" }
 barry-testkit = { path = "crates/testkit" }
 
 # Dev-dependencies
-assert_cmd = { version = "=2.2.2" }
-predicates = { version = "=3.1.4" }
-wiremock = { version = "=0.6.5" }
-insta = { version = "=1.49.0" }
-proptest = { version = "=1.12.0", default-features = false, features = ["std"] }
+assert_cmd = "2.2.2"
+predicates = "3.1.4"
+wiremock = "0.6.5"
+insta = "1.49.0"
+proptest = { version = "1.12.0", default-features = false, features = ["std"] }
 
 [profile.release]
 lto = "fat"

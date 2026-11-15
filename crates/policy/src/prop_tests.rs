@@ -9,7 +9,7 @@ use std::path::{Component, Path, PathBuf};
 
 use proptest::prelude::*;
 
-use crate::{canonicalise, is_under, Decision, PathError, Policy, PolicyConfig};
+use crate::{Decision, PathError, Policy, PolicyConfig, SessionGrants, canonicalise, is_under};
 
 /// A project directory with a mix of real files, directories and symlinks,
 /// plus a sibling directory outside it that symlinks can point at.
@@ -142,7 +142,7 @@ fn allowed_writes_resolve_inside_the_project() {
     let fx = Fixture::new();
     let policy = fx.policy(vec![]);
     proptest!(|(path in relative_path())| {
-        let (decision, _) = policy.check_write(Path::new(&path));
+        let (decision, _) = policy.check_write(Path::new(&path), &SessionGrants::new());
         if matches!(decision, Decision::Allow) {
             let real = resolve(&fx.cwd, &path);
             prop_assert!(
@@ -159,7 +159,7 @@ fn writes_through_an_outside_symlink_are_never_allowed() {
     let policy = fx.policy(vec![]);
     proptest!(|(tail in prop::collection::vec(segment(), 0..4))| {
         let path = format!("link_out/{}", tail.join("/"));
-        let (decision, _) = policy.check_write(Path::new(&path));
+        let (decision, _) = policy.check_write(Path::new(&path), &SessionGrants::new());
         prop_assert!(
             !matches!(decision, Decision::Allow),
             "{path:?} escapes to {:?} but was allowed",
@@ -183,17 +183,15 @@ fn read_deny_holds_through_symlinks() {
     });
 }
 
-/// Known bug (review finding #11, fixed by the open dangling-symlink PR): a
-/// symlink inside the project that points at a missing target outside it is
-/// treated as a missing file, so the write is allowed and then follows the
-/// link out of the project. Run with `--ignored` to reproduce.
+/// Regression test for review finding #11: a symlink inside the project that
+/// points at a missing target outside it must not be writable, or the write
+/// would follow the link out of the project.
 #[test]
-#[ignore = "fails until dangling symlinks are refused (#11)"]
 fn dangling_symlink_to_outside_is_not_writable() {
     let fx = Fixture::new();
     std::os::unix::fs::symlink(fx.outside.join("missing"), fx.cwd.join("dangling")).unwrap();
     let policy = fx.policy(vec![]);
-    let (decision, _) = policy.check_write(Path::new("dangling"));
+    let (decision, _) = policy.check_write(Path::new("dangling"), &SessionGrants::new());
     assert!(!matches!(decision, Decision::Allow));
 }
 
@@ -215,7 +213,7 @@ fn fresh_policy() -> Policy {
 proptest! {
     #[test]
     fn check_bash_never_panics(command in any::<String>()) {
-        let _ = fresh_policy().check_bash(&command);
+        let _ = fresh_policy().check_bash(&command, &SessionGrants::new());
     }
 
     #[test]
@@ -225,16 +223,23 @@ proptest! {
         lead in "(ls|echo hi|cat x)( && | ; | \\|\\| )",
         granted in any::<bool>(),
     ) {
-        let mut policy = fresh_policy();
+        let policy = fresh_policy();
+        let mut grants = SessionGrants::new();
         if granted {
             // A session grant must not lift an explicit deny.
-            policy.approve_prefix(prefix.trim_end());
-            policy.approve_prefix("ls");
+            grants.approve_prefix(prefix.split_whitespace().map(str::to_string).collect());
+            grants.approve_prefix(vec!["ls".to_string()]);
         }
         for command in [format!("{prefix}{tail}"), format!("{lead}{prefix}{tail}")] {
-            let (decision, _) = policy.check_bash(&command);
+            let (decision, _) = policy.check_bash(&command, &grants);
+            // A command the parser cannot read is asked about, never allowed;
+            // everything it can read keeps the explicit deny.
+            let unreadable = matches!(
+                &decision,
+                Decision::Ask { reason } if reason.contains("cannot be analysed")
+            );
             prop_assert!(
-                matches!(decision, Decision::Deny { .. }),
+                matches!(decision, Decision::Deny { .. }) || unreadable,
                 "{command:?} was not denied: {decision:?}"
             );
         }
@@ -242,7 +247,7 @@ proptest! {
 
     #[test]
     fn allowed_commands_have_no_redirect_or_substitution(command in any::<String>()) {
-        let (decision, _) = fresh_policy().check_bash(&command);
+        let (decision, _) = fresh_policy().check_bash(&command, &SessionGrants::new());
         if matches!(decision, Decision::Allow) {
             for construct in ["$(", "`", ">", "-delete"] {
                 prop_assert!(

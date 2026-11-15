@@ -7,10 +7,11 @@
 
 use barry_protocol::{Message, StopReason, ToolCall};
 use proptest::prelude::*;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
+use std::fmt::Write as _;
 
-use crate::sse::{parse_event_block, SseEvent, SseParser, StreamState};
 use crate::LlmEvent;
+use crate::sse::{SseEvent, SseParser, StreamState, parse_event_block};
 
 fn json_value(text: &'static str) -> impl Strategy<Value = Value> {
     let leaf = prop_oneof![
@@ -200,7 +201,7 @@ proptest! {
     ) {
         let mut wire = String::new();
         for chunk in chunks_for(&plans, &order) {
-            wire.push_str(&format!("data: {chunk}\n\n"));
+            let _ = write!(wire, "data: {chunk}\n\n");
         }
         wire.push_str("data: [DONE]\n\n");
 
