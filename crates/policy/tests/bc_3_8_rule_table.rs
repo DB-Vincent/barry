@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-3.8 Rule table: each command maps to the expected decision.
 use barry_policy::{Decision, Policy, PolicyConfig};
 

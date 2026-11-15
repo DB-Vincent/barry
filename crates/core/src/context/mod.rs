@@ -9,4 +9,3 @@ pub mod truncate;
 
 pub use instructions::instructions_section;
 pub use skills::skills_section;
-pub use truncate::truncate;

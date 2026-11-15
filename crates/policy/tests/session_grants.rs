@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// Grants live in `SessionGrants`, not in `Policy`: the policy is unchanged by
 /// approvals, and each `SessionGrants` is independent.
 use barry_policy::{Decision, Policy, PolicyConfig, SessionGrants};
@@ -38,10 +40,12 @@ fn dir_grant_allows_outside_write_only_with_that_grants_object() {
         policy.check_write(&target, &fresh).0,
         Decision::Ask { .. }
     ));
-    assert!(policy
-        .writable_roots()
-        .iter()
-        .all(|r| !target.starts_with(r)));
+    assert!(
+        policy
+            .writable_roots()
+            .iter()
+            .all(|r| !target.starts_with(r))
+    );
 }
 
 #[test]
@@ -54,7 +58,7 @@ fn prefix_grant_is_scoped_to_its_session_grants() {
         policy.check_bash("mytool run", &grants).0,
         Decision::Ask { .. }
     ));
-    grants.approve_prefix("mytool");
+    grants.approve_prefix(vec!["mytool".to_string()]);
     assert_eq!(policy.check_bash("mytool run", &grants).0, Decision::Allow);
     assert!(matches!(
         policy.check_bash("mytool run", &SessionGrants::new()).0,
@@ -67,7 +71,7 @@ fn grants_never_override_deny_rules() {
     let ws = Workspace::new();
     let policy = policy(&ws);
     let mut grants = SessionGrants::new();
-    grants.approve_prefix("sudo");
+    grants.approve_prefix(vec!["sudo".to_string()]);
     assert!(matches!(
         policy.check_bash("sudo ls", &grants).0,
         Decision::Deny { .. }

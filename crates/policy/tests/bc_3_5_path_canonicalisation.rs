@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 /// BC-3.5: `../x` and a symlink inside cwd that points outside are both
 /// treated as outside cwd.
 ///
