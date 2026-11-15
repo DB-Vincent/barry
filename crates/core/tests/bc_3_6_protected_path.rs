@@ -107,6 +107,7 @@ async fn bc_3_6_protected_path_inside_cwd_asks() {
             max_turns: 10,
             context_window: 32_768,
             sandbox_network: true,
+            redact_tool_output: false,
             fs_read_deny: vec![],
             fs_protected: vec![],
             rules: vec![],

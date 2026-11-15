@@ -78,6 +78,7 @@ async fn bc_6_4_reported_usage_drives_the_context_estimate() {
             max_turns: 50,
             context_window: 20_000,
             sandbox_network: false,
+            redact_tool_output: false,
             fs_read_deny: vec![],
             fs_protected: vec![],
             rules: vec![],

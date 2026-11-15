@@ -105,6 +105,7 @@ async fn run_tool(tool: &str, arguments: serde_json::Value) -> Run {
             max_turns: 10,
             context_window: 32_768,
             sandbox_network: true,
+            redact_tool_output: false,
             fs_read_deny: vec![],
             fs_protected: vec![],
             rules: vec![],

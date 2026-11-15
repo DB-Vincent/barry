@@ -14,6 +14,7 @@ use tokio_util::sync::CancellationToken;
 use crate::config::Config;
 use crate::hooks::Hook;
 use crate::prompt::{system_prompt, PromptContext};
+use crate::redact::Redactor;
 use crate::session::{self, decided_by_label, decision_label, EntryKind, SessionError, SessionLog};
 use crate::tools::{execute_tool, tool_specs, ToolResult};
 use crate::{Approver, CoreError};
@@ -79,6 +80,8 @@ pub struct Agent {
     session: Option<SessionLog>,
     /// Whether a session-log write failure has already been reported.
     session_warned: bool,
+    /// Masks secrets in tool output before it reaches the model (#17).
+    redactor: Redactor,
     /// Compiled PreToolUse hooks (PLAN 6.5).
     hooks: Vec<Hook>,
 }
@@ -132,6 +135,7 @@ impl Agent {
             bytes_at_response: 0,
             session: None,
             session_warned: false,
+            redactor: Redactor::from_env(),
             hooks,
         })
     }
@@ -206,6 +210,20 @@ impl Agent {
     }
 
     /// Record the outcome after a tool finishes.
+    /// The content a tool result contributes to the model (#17).
+    ///
+    /// Tool output can carry credentials - `cat .env`, a grep over a config
+    /// file - and the provider may be remote. Redaction is opt-in, so the
+    /// default keeps BC-5.3: the model sees the real output, while the session
+    /// log is redacted either way.
+    fn model_tool_content(&self, result: &ToolResult) -> String {
+        if self.cfg.redact_tool_output {
+            self.redactor.redact(&result.content)
+        } else {
+            result.content.clone()
+        }
+    }
+
     fn log_result(&mut self, call: &ToolCall, result: &ToolResult) {
         self.log(EntryKind::ToolResult {
             call_id: call.id.clone(),
@@ -598,7 +616,7 @@ impl Agent {
                                         content: wrap_tool_output(
                                             &call.name,
                                             result.ok,
-                                            &result.content,
+                                            &self.model_tool_content(&result),
                                         ),
                                         ok: result.ok,
                                     };

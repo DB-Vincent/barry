@@ -84,6 +84,7 @@ fn config_with_window(window: u64) -> barry_core::config::Config {
         max_turns: 50,
         context_window: window,
         sandbox_network: true,
+        redact_tool_output: false,
         fs_read_deny: vec![],
         fs_protected: vec![],
         rules: vec![],

@@ -118,6 +118,7 @@ async fn bc_2_7_three_results_in_call_order_when_one_fails() {
             max_turns: 10,
             context_window: 32_768,
             sandbox_network: true,
+            redact_tool_output: false,
             fs_read_deny: vec![],
             fs_protected: vec![],
             rules: vec![],

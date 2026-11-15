@@ -38,6 +38,11 @@ pub struct Config {
     /// Filesystem: path components that always require approval (e.g. `.git`,
     /// `.barry`, `.env`).
     pub fs_protected: Vec<String>,
+    /// Whether tool results are redacted before they are sent to the model
+    /// (#17). Off by default, which keeps BC-5.3: the model receives the real
+    /// tool output and only the session log is redacted. Turn it on when the
+    /// provider is remote and tool output may carry credentials.
+    pub redact_tool_output: bool,
     /// Bash rules (`[[rule]]`), applied after the built-in defaults.
     pub rules: Vec<BashRule>,
     /// Hooks run around tool execution (PLAN 6.5).
@@ -99,6 +104,7 @@ impl Default for Config {
             // directories are opt-in, because the output goes to the model
             // and the model may be remote (#10).
             sandbox_network: false,
+            redact_tool_output: false,
             fs_read_deny: default_read_deny(),
             fs_protected: default_protected(),
             rules: vec![],
@@ -160,6 +166,12 @@ impl Config {
             })
             .unwrap_or_else(default_protected);
 
+        let redact_tool_output = value
+            .get("redaction")
+            .and_then(|r| r.get("tool_output"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
         let rules = parse_rules(path, &value)?;
 
         let hooks: Vec<HookConfig> = value
@@ -214,6 +226,7 @@ impl Config {
             sandbox_network,
             fs_read_deny,
             fs_protected,
+            redact_tool_output,
             rules,
             hooks,
         }))
