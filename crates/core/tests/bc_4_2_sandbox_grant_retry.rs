@@ -162,3 +162,52 @@ async fn bc_4_2_sandbox_denial_deny_sends_original_failure() {
 
     assert_eq!(approver.asked().len(), 2, "approver consulted twice");
 }
+
+/// #20 A missing file is not a sandbox denial.
+///
+/// `ls missing-file.txt` prints "No such file or directory", which a denied
+/// write also prints. Treating the two the same offered the user a directory
+/// grant because of a typo.
+#[tokio::test]
+async fn bc_4_2_missing_file_offers_no_grant() {
+    let ws = Workspace::new();
+    let approver = Arc::new(ScriptedApprover::none());
+    let provider = Arc::new(ScriptedProvider::new(vec![
+        bash("ls missing-file.txt"),
+        Reply::Text {
+            content: "it is not there".to_string(),
+        },
+    ]));
+
+    let mut agent = Agent::new(
+        config(),
+        provider.clone(),
+        approver.clone(),
+        Some(policy(&ws)),
+    )
+    .expect("agent constructs");
+
+    let (tx, _rx) = mpsc::channel(32);
+    let stop = agent
+        .run_turn("read a missing file", tx, CancellationToken::new())
+        .await
+        .expect("turn completes");
+    assert_eq!(stop, StopReason::Stop);
+
+    assert!(
+        approver.asked().is_empty(),
+        "no approval is requested for a missing file: {:?}",
+        approver
+            .asked()
+            .iter()
+            .map(|r| r.summary.clone())
+            .collect::<Vec<_>>()
+    );
+
+    let (ok, content) = last_tool_result(&provider.seen_requests());
+    assert!(!ok, "the command failed: {content}");
+    assert!(
+        content.contains("No such file or directory"),
+        "the real error reaches the model: {content}"
+    );
+}
