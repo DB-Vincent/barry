@@ -174,32 +174,38 @@ impl Policy {
 
     /// Record a directory grant, making it writable for the rest of the session.
     pub fn grant_dir(&mut self, dir: &Path) -> Result<(), PolicyError> {
-        let canonical = match canonicalise(&self.cwd, dir) {
-            Ok(c) => c,
-            Err(PathError::DotDot { .. }) => {
-                // `..` components are rejected by canonicalise (PLAN 6.1.1),
-                // but grant_dir is user-initiated explicit permission, so
-                // resolve `..` manually by walking up from cwd.
-                let mut current = self.cwd.clone();
-                for component in dir.components() {
-                    match component {
-                        Component::ParentDir => {
-                            current.pop();
-                        }
-                        Component::Normal(c) => {
-                            current.push(c);
-                        }
-                        _ => {}
-                    }
-                }
-                current
-            }
-            Err(_) => return Err(PolicyError::InvalidPath(dir.to_path_buf())),
-        };
-        // Create the directory if it doesn't exist so bwrap can bind-mount it.
-        let _ = std::fs::create_dir_all(&canonical);
+        let canonical = self.resolve_grant(dir)?;
         self.grants.push(canonical);
         Ok(())
+    }
+
+    /// Resolve a grant target to a canonical absolute path.
+    ///
+    /// `canonicalise` rejects `..` (PLAN 6.1.1), but a grant is explicit user
+    /// permission, so `..` is resolved lexically here first. The base matters:
+    /// an absolute path starts at the filesystem root, never at cwd, so
+    /// `/a/../b` is `/b` and not `<cwd>/b`. Existing ancestors are then
+    /// canonicalised so a grant compares equal to the symlink-resolved paths
+    /// used everywhere else.
+    fn resolve_grant(&self, dir: &Path) -> Result<PathBuf, PolicyError> {
+        let mut normalised = if dir.is_absolute() {
+            PathBuf::from(Component::RootDir.as_os_str())
+        } else {
+            self.cwd.clone()
+        };
+        for component in dir.components() {
+            match component {
+                Component::RootDir | Component::Prefix(_) | Component::CurDir => {}
+                // `PathBuf::pop` on `/` is a no-op, so `..` cannot climb above
+                // the root.
+                Component::ParentDir => {
+                    normalised.pop();
+                }
+                Component::Normal(name) => normalised.push(name),
+            }
+        }
+        canonicalise(&self.cwd, &normalised)
+            .map_err(|_| PolicyError::InvalidPath(dir.to_path_buf()))
     }
 
     /// Grant a bash command prefix for the rest of the session.
