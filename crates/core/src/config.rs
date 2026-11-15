@@ -58,15 +58,49 @@ pub struct HookConfig {
     pub fail_closed: bool,
 }
 
+/// Read-deny paths used when the config does not say otherwise (#10).
+///
+/// These are where credentials live, and a read result goes to the model, so
+/// `cat ~/.ssh/id_rsa` must not be allowed just because `cat` is a safe
+/// command. Entries are paths, not globs: a read is denied for anything under
+/// one of them.
+///
+/// Setting `fs.read_deny = []` in the config file opts out entirely.
+pub fn default_read_deny() -> Vec<String> {
+    [
+        "~/.ssh",
+        "~/.aws",
+        "~/.config/gcloud",
+        "~/.kube",
+        "~/.docker",
+        "~/.gnupg",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect()
+}
+
+/// Protected path components used when the config does not say otherwise.
+/// A write to one of these always asks (PLAN 6.1.1, #10).
+pub fn default_protected() -> Vec<String> {
+    [".git", ".barry", ".env"]
+        .into_iter()
+        .map(String::from)
+        .collect()
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
             default_model: "local".to_string(),
             max_turns: 50,
             context_window: 32_768,
-            sandbox_network: true,
-            fs_read_deny: vec![],
-            fs_protected: vec![],
+            // Deny by default: network access and reading credential
+            // directories are opt-in, because the output goes to the model
+            // and the model may be remote (#10).
+            sandbox_network: false,
+            fs_read_deny: default_read_deny(),
+            fs_protected: default_protected(),
             rules: vec![],
             hooks: vec![],
         }
@@ -102,7 +136,7 @@ impl Config {
             .get("sandbox")
             .and_then(|s| s.get("network"))
             .and_then(|n| n.as_bool())
-            .unwrap_or(true);
+            .unwrap_or(false);
 
         let fs_read_deny: Vec<String> = value
             .get("fs")
@@ -113,7 +147,7 @@ impl Config {
                     .filter_map(|v| v.as_str().map(|s| s.to_string()))
                     .collect()
             })
-            .unwrap_or_default();
+            .unwrap_or_else(default_read_deny);
 
         let fs_protected: Vec<String> = value
             .get("fs")
@@ -124,7 +158,7 @@ impl Config {
                     .filter_map(|v| v.as_str().map(|s| s.to_string()))
                     .collect()
             })
-            .unwrap_or_default();
+            .unwrap_or_else(default_protected);
 
         let rules = parse_rules(path, &value)?;
 
