@@ -184,7 +184,7 @@ impl Hook {
                 reason: stderr.trim().to_string(),
             },
             _ => HookOutcome::Warning {
-                reason: format!("hook exited {:?}: {stderr}", code),
+                reason: format!("hook exited {code:?}: {stderr}"),
             },
         }
     }

@@ -177,6 +177,7 @@ impl SessionLog {
     }
 
     /// The file this log writes to.
+    #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }

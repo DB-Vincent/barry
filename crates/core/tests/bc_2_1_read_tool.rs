@@ -155,8 +155,7 @@ async fn bc_2_1_read_tool_returns_numbered_contents() {
     });
     assert!(
         numbered_found,
-        "expected numbered file contents in tool result, got: {:?}",
-        events
+        "expected numbered file contents in tool result, got: {events:?}"
     );
 
     // One TextDelta from the model's final answer.

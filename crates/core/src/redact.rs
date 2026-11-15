@@ -16,6 +16,7 @@ pub struct Redactor {
 impl Redactor {
     /// Build a redactor from the built-in patterns and the values of
     /// environment variables whose names look sensitive (PLAN 6.7).
+    #[must_use]
     pub fn from_env() -> Self {
         let mut literals = Vec::new();
         for (name, value) in std::env::vars_os() {
@@ -35,6 +36,7 @@ impl Redactor {
     }
 
     /// Build a redactor with explicit literal values (tests, custom setups).
+    #[must_use]
     pub fn new(mut literals: Vec<String>) -> Self {
         let patterns = [
             r"sk-[A-Za-z0-9_-]{20,}",
@@ -55,6 +57,7 @@ impl Redactor {
     }
 
     /// Redact every recognised secret in `text`.
+    #[must_use]
     pub fn redact(&self, text: &str) -> String {
         let mut out = text.to_string();
         for pattern in &self.patterns {

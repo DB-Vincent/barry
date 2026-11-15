@@ -94,6 +94,7 @@ impl Policy {
 
     /// Check a read against policy. Reads under a read-deny entry are denied;
     /// everything else is allowed.
+    #[must_use]
     pub fn check_read(&self, path: &Path) -> Decision {
         let canonical = match canonicalise(&self.cwd, path) {
             Ok(c) => c,
@@ -119,6 +120,7 @@ impl Policy {
     ///
     /// Returns `(Decision, Option<PathBuf>)`. The grant path, when `Some`,
     /// is the parent directory the user would need to grant.
+    #[must_use]
     pub fn check_write(&self, path: &Path) -> (Decision, Option<PathBuf>) {
         let canonical = match canonicalise(&self.cwd, path) {
             Ok(c) => c,
@@ -209,22 +211,26 @@ impl Policy {
     }
 
     /// Session working directory.
+    #[must_use]
     pub fn cwd(&self) -> &Path {
         &self.cwd
     }
 
     /// Writable roots (cwd + extra writable dirs). Grants are separate so the
     /// sandbox can mount them after protected paths.
+    #[must_use]
     pub fn writable_roots(&self) -> &[PathBuf] {
         &self.writable_roots
     }
 
     /// Explicit directory grants, mounted read-write after protected paths.
+    #[must_use]
     pub fn grants(&self) -> &[PathBuf] {
         &self.grants
     }
 
     /// Whether `path` lies under a directory granted this session.
+    #[must_use]
     pub fn is_granted(&self, path: &Path) -> bool {
         let Ok(canonical) = canonicalise(&self.cwd, path) else {
             return false;
@@ -233,21 +239,25 @@ impl Policy {
     }
 
     /// Read-deny paths (canonicalised).
+    #[must_use]
     pub fn read_deny_paths(&self) -> &[PathBuf] {
         &self.read_deny
     }
 
     /// Protected path components (e.g. ".git").
+    #[must_use]
     pub fn protected(&self) -> &[String] {
         &self.protected
     }
 
     /// Configured bash rules, in order.
+    #[must_use]
     pub fn rules(&self) -> &[BashRule] {
         &self.rules
     }
 
     /// Whether sandboxed bash commands may access the network.
+    #[must_use]
     pub fn network(&self) -> bool {
         self.network
     }
@@ -311,7 +321,7 @@ impl Policy {
         // 4. Split by && || ; and check each segment against allow rules
         let segments: Vec<&str> = command
             .split(&['&', '|', ';'][..])
-            .map(|s| s.trim())
+            .map(str::trim)
             .filter(|s| !s.is_empty())
             .collect();
 

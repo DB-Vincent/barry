@@ -74,6 +74,5 @@ fn backoff(attempt: u32) -> Duration {
 fn jitter_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| u64::from(d.subsec_nanos()) % MAX_JITTER_MS)
-        .unwrap_or(0)
+        .map_or(0, |d| u64::from(d.subsec_nanos()) % MAX_JITTER_MS)
 }

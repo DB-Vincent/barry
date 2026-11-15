@@ -133,10 +133,7 @@ impl Renderer {
 
 /// Turn `bash {"command":"cargo test"}` into `cargo test`.
 fn tool_detail(name: &str, display: &str) -> String {
-    let detail = display
-        .strip_prefix(name)
-        .map(str::trim_start)
-        .unwrap_or(display);
+    let detail = display.strip_prefix(name).map_or(display, str::trim_start);
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(detail) {
         let key = match name {
             "bash" => "command",

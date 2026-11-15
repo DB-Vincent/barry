@@ -63,9 +63,10 @@ impl Agent {
         // PLAN 6.3: assemble the AGENTS.md and skills sections for the prompt.
         let git_root = find_git_root(&cwd);
         let agents_md_section = crate::context::instructions_section(&git_root, &cwd);
-        let global_skills = std::env::var("HOME")
-            .map(|home| PathBuf::from(home).join(".config/barry/skills"))
-            .unwrap_or_else(|_| PathBuf::from(".config/barry/skills"));
+        let global_skills = std::env::var("HOME").map_or_else(
+            |_| PathBuf::from(".config/barry/skills"),
+            |home| PathBuf::from(home).join(".config/barry/skills"),
+        );
         let project_skills = git_root.join(".barry/skills");
         let skills_section = crate::context::skills_section(&global_skills, &project_skills);
 
@@ -100,6 +101,7 @@ impl Agent {
     }
 
     /// Attach an audit log and record `session_start` (PLAN 6.7).
+    #[must_use]
     pub fn with_session_log(mut self, mut log: SessionLog) -> Self {
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         if let Err(err) = log.append(EntryKind::SessionStart {
@@ -125,14 +127,14 @@ impl Agent {
     ) -> Result<Self, CoreError> {
         // Never extend a chain that does not verify: the audit trail is the
         // point of resuming from it.
-        let report = session::verify(session_file).map_err(session_error)?;
+        let report = session::verify(session_file).map_err(|err| session_error(&err))?;
         if let Some(line) = report.broken_at {
             return Err(CoreError::Session(format!(
                 "session log is broken at line {line}"
             )));
         }
-        let history = session::replay_history(session_file).map_err(session_error)?;
-        let log = SessionLog::open_append(session_file).map_err(session_error)?;
+        let history = session::replay_history(session_file).map_err(|err| session_error(&err))?;
+        let log = SessionLog::open_append(session_file).map_err(|err| session_error(&err))?;
 
         let mut agent = Self::new(cfg, provider, approver, policy)?;
         agent.history = history;
@@ -158,13 +160,13 @@ impl Agent {
     /// Record the decision for a call the agent never handed to `execute_tool`
     /// (a cancelled call). Executed calls log their own decision before
     /// running (BC-5.1).
-    fn log_decision(&mut self, call: &ToolCall, decision: Decision, decided_by: DecidedBy) {
+    fn log_decision(&mut self, call: &ToolCall, decision: &Decision, decided_by: &DecidedBy) {
         self.log(EntryKind::ToolDecision {
             call_id: call.id.clone(),
             tool: call.name.clone(),
             input: call.arguments.clone(),
-            decision: decision_label(&decision),
-            decided_by: decided_by_label(&decided_by),
+            decision: decision_label(decision),
+            decided_by: decided_by_label(decided_by),
         });
     }
 
@@ -403,10 +405,10 @@ impl Agent {
                                         let interrupted = ToolResult::interrupted();
                                         self.log_decision(
                                             call,
-                                            Decision::Deny {
+                                            &Decision::Deny {
                                                 reason: "interrupted by user".to_string(),
                                             },
-                                            DecidedBy::User,
+                                            &DecidedBy::User,
                                         );
                                         self.log_result(call, &interrupted);
                                         let tool_message = Message::Tool {
@@ -530,6 +532,7 @@ impl Agent {
     }
 
     /// Directories granted this session (PLAN 6.9 `/grants`).
+    #[must_use]
     pub fn grants(&self) -> Vec<std::path::PathBuf> {
         self.policy
             .as_ref()
@@ -544,7 +547,7 @@ impl Agent {
     }
 }
 
-fn session_error(err: SessionError) -> CoreError {
+fn session_error(err: &SessionError) -> CoreError {
     CoreError::Session(err.to_string())
 }
 
@@ -558,8 +561,8 @@ fn message_bytes(m: &Message) -> u64 {
             reasoning,
             tool_calls,
         } => {
-            let mut n = content.as_ref().map(|s| s.len()).unwrap_or(0);
-            n += reasoning.as_ref().map(|s| s.len()).unwrap_or(0);
+            let mut n = content.as_ref().map_or(0, std::string::String::len);
+            n += reasoning.as_ref().map_or(0, std::string::String::len);
             n += tool_calls
                 .iter()
                 .map(|c| c.arguments.to_string().len())

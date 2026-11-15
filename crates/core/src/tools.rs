@@ -197,9 +197,7 @@ pub(crate) async fn execute_tool(
 ) -> Result<ToolResult, CoreError> {
     // PLAN 6.5: PreToolUse hooks run before the policy. A hook can deny or
     // block the tool, rewrite its input, or emit a warning.
-    let cwd = std::env::current_dir()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|_| ".".to_string());
+    let cwd = std::env::current_dir().map_or_else(|_| ".".to_string(), |p| p.display().to_string());
     let mut arguments = call.arguments.clone();
     for hook in hooks.iter().filter(|h| h.matches(&call.name)) {
         let input = serde_json::to_string(&arguments).unwrap_or_default();
@@ -266,9 +264,8 @@ pub(crate) async fn execute_tool(
             // plain u64 and needs no Option.
             let timeout_secs = arguments
                 .get("timeout_secs")
-                .and_then(|v| v.as_u64())
-                .map(|secs| secs.clamp(1, 600))
-                .unwrap_or(120);
+                .and_then(serde_json::Value::as_u64)
+                .map_or(120, |secs| secs.clamp(1, 600));
 
             // Policy check: deny > grant > ask > allow.
             let Some(policy) = policy.as_mut() else {
@@ -482,28 +479,22 @@ async fn execute_edit(
     match count {
         0 => Ok(ToolResult::new(
             false,
-            format!("no matches found for '{}' in {}", old_string, path),
-            format!("no matches found for '{}'", old_string),
+            format!("no matches found for '{old_string}' in {path}"),
+            format!("no matches found for '{old_string}'"),
         )),
         1 => {
             let new_content = content.replacen(old_string, new_string, 1);
             std::fs::write(path, &new_content).map_err(|e| CoreError::Provider(e.to_string()))?;
             Ok(ToolResult::new(
                 true,
-                format!(
-                    "replaced 1 occurrence of '{}' with '{}' in {}",
-                    old_string, new_string, path
-                ),
-                format!("replaced '{}' with '{}'", old_string, new_string),
+                format!("replaced 1 occurrence of '{old_string}' with '{new_string}' in {path}"),
+                format!("replaced '{old_string}' with '{new_string}'"),
             ))
         }
         n => Ok(ToolResult::new(
             false,
-            format!(
-                "found {} matches for '{}' in {}; no changes made",
-                n, old_string, path
-            ),
-            format!("found {} matches for '{}'; no changes made", n, old_string),
+            format!("found {n} matches for '{old_string}' in {path}; no changes made"),
+            format!("found {n} matches for '{old_string}'; no changes made"),
         )),
     }
 }
@@ -727,7 +718,7 @@ fn sandbox_denied_dir(_result: &ToolResult, command: &str) -> Option<std::path::
 
         if let Some(target) = target {
             let path = std::path::Path::new(target);
-            return path.parent().map(|p| p.to_path_buf());
+            return path.parent().map(std::path::Path::to_path_buf);
         }
     }
     None

@@ -94,7 +94,7 @@ impl Config {
         let sandbox_network = value
             .get("sandbox")
             .and_then(|s| s.get("network"))
-            .and_then(|n| n.as_bool())
+            .and_then(toml::Value::as_bool)
             .unwrap_or(true);
 
         let fs_read_deny: Vec<String> = value
@@ -103,7 +103,7 @@ impl Config {
             .and_then(|r| r.as_array())
             .map(|arr| {
                 arr.iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .filter_map(|v| v.as_str().map(std::string::ToString::to_string))
                     .collect()
             })
             .unwrap_or_default();
@@ -114,7 +114,7 @@ impl Config {
             .and_then(|r| r.as_array())
             .map(|arr| {
                 arr.iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .filter_map(|v| v.as_str().map(std::string::ToString::to_string))
                     .collect()
             })
             .unwrap_or_default();
@@ -129,25 +129,27 @@ impl Config {
                         let matcher = v
                             .get("matcher")
                             .and_then(|m| m.as_str())
-                            .map(|s| s.to_string())
+                            .map(std::string::ToString::to_string)
                             .unwrap_or_default();
                         let command: Vec<String> = v
                             .get("command")
                             .and_then(|c| c.as_array())
                             .map(|arr| {
                                 arr.iter()
-                                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                    .filter_map(|v| {
+                                        v.as_str().map(std::string::ToString::to_string)
+                                    })
                                     .collect()
                             })
                             .unwrap_or_default();
                         let timeout_secs = v
                             .get("timeout_secs")
-                            .and_then(|t| t.as_integer())
+                            .and_then(toml::Value::as_integer)
                             .and_then(|t| u64::try_from(t).ok())
                             .unwrap_or(10);
                         let fail_closed = v
                             .get("fail_closed")
-                            .and_then(|f| f.as_bool())
+                            .and_then(toml::Value::as_bool)
                             .unwrap_or(false);
                         if matcher.is_empty() || command.is_empty() {
                             None

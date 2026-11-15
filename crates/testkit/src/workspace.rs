@@ -12,6 +12,7 @@ pub struct Workspace {
 
 #[allow(clippy::new_without_default)]
 impl Workspace {
+    #[must_use]
     pub fn new() -> Self {
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path().to_path_buf();
@@ -44,18 +45,22 @@ impl Workspace {
         }
     }
 
+    #[must_use]
     pub fn cwd(&self) -> &Path {
         self.project.as_path()
     }
 
+    #[must_use]
     pub fn outside(&self) -> &Path {
         self.outside.as_path()
     }
 
+    #[must_use]
     pub fn home(&self) -> &Path {
         self.home.as_path()
     }
 
+    #[must_use]
     pub fn file(&self, rel: &str) -> PathBuf {
         self.project.join(rel)
     }

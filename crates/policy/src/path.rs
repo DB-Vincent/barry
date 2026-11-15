@@ -87,6 +87,7 @@ pub fn canonicalise(cwd: &Path, path: &Path) -> Result<PathBuf, PathError> {
 }
 
 /// Returns `true` if `canonical` is inside `root` (or equal to it).
+#[must_use]
 pub fn is_under(canonical: &Path, root: &Path) -> bool {
     canonical.starts_with(root)
 }
