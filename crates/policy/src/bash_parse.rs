@@ -119,7 +119,8 @@ fn parse_command(node: Node<'_>, src: &[u8]) -> Result<SimpleCmd, String> {
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
         match child.kind() {
-            "command_name" | "word" | "number" => argv.push(text(child, src)?),
+            "command_name" => argv.push(command_name(child, src)?),
+            "word" | "number" => argv.push(text(child, src)?),
             "raw_string" => argv.push(unquote(&text(child, src)?, '\'')?),
             // Double quotes are fine only without expansion inside them.
             "string" if is_literal_string(child) => {
@@ -137,6 +138,30 @@ fn parse_command(node: Node<'_>, src: &[u8]) -> Result<SimpleCmd, String> {
         argv,
         redirect_targets: Vec::new(),
     })
+}
+
+/// The text of a `command_name`, which must be a single literal word.
+///
+/// A plain name is a `command_name` wrapping one `word`, but the grammar also
+/// wraps a `concatenation` in `command_name` for input it cannot lex cleanly:
+/// `sudo ``a` (an unbalanced backtick pair) becomes one command name spanning
+/// the space. Taking its text verbatim put both words into a single argv
+/// element, so the exact `sudo` deny rule no longer matched it. Anything that
+/// is not a lone literal word is refused, so the caller fails closed.
+fn command_name(node: Node<'_>, src: &[u8]) -> Result<String, String> {
+    let mut cursor = node.walk();
+    let mut children = node.named_children(&mut cursor);
+    let Some(only) = children.next() else {
+        return Err("empty command name".to_string());
+    };
+    if children.next().is_some() {
+        return Err("unsupported command name".to_string());
+    }
+    match only.kind() {
+        "word" | "number" | "raw_string" => text(node, src),
+        "string" if is_literal_string(only) => text(node, src),
+        other => Err(format!("unsupported command name: {other}")),
+    }
 }
 
 /// Remove wrapper commands so `timeout 5 cargo test` is judged as
@@ -280,6 +305,31 @@ mod tests {
             assert!(
                 matches!(analyse(command), Analysis::Complex(_)),
                 "{command} should be complex"
+            );
+        }
+    }
+
+    /// Regression test: `sudo ``a` (an unbalanced backtick pair) used to parse
+    /// as one `command_name` spanning the space, so argv[0] was the whole
+    /// string and the exact `sudo` deny rule never saw it; the command fell
+    /// through to `Ask`. A command name must now be a single literal word, so
+    /// the input is `Complex` and the rule layer answers `Ask`, never `Allow`.
+    #[test]
+    fn a_command_name_must_be_a_single_word() {
+        assert!(matches!(analyse("sudo ``a"), Analysis::Complex(_)));
+        assert!(matches!(analyse("echo ``a"), Analysis::Complex(_)));
+
+        // Ordinary command names, including the wrapper forms, still parse.
+        for command in [
+            "ls -la",
+            "git status",
+            "timeout 5 cargo test",
+            "env FOO=1 ls",
+            "/usr/bin/env ls",
+        ] {
+            assert!(
+                matches!(analyse(command), Analysis::Simple(_)),
+                "{command:?} should be simple"
             );
         }
     }
