@@ -9,6 +9,17 @@ members = [
     "crates/cli",
     "crates/testkit",
 ]
+# Not a member: a path dependency under the workspace root would otherwise be
+# pulled in automatically, and its Rust build script and bindings are upstream
+# code that fmt/clippy should not lint as ours.
+exclude = ["vendor/tree-sitter-bash"]
+
+# Pinned grammar with one fix: 0.25.1 calls narrow `isdigit` on a Unicode code
+# point in its external scanner, which is undefined behaviour and segfaults on
+# commands like `{<non-ASCII>}`. See vendor/tree-sitter-bash/PATCHES.md; drop
+# this and update the crate when a release has the fix.
+[patch.crates-io]
+tree-sitter-bash = { path = "vendor/tree-sitter-bash" }
 
 [workspace.package]
 version = "0.1.0"
