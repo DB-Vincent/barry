@@ -338,6 +338,18 @@ async fn handle_command(
     agent: &mut Agent,
     base_url: &Url,
 ) -> bool {
+    if command == "auth" || command.starts_with("auth ") {
+        match crate::auth::Command::parse_repl(command.strip_prefix("auth").unwrap_or_default()) {
+            Some(command) => {
+                let code = command.run().await;
+                if code != 0 {
+                    eprintln!("authentication command exited with status {code}");
+                }
+            }
+            None => println!("{}", crate::auth::REPL_USAGE),
+        }
+        return true;
+    }
     match command {
         "exit" | "quit" => return false,
         "compact" => {

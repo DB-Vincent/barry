@@ -229,7 +229,7 @@ fn which_bwrap() -> Result<PathBuf, SandboxError> {
 /// Installs a seccomp filter then runs the command. The seccomp filter is
 /// inherited by the child process.
 pub(crate) fn run_helper_if_invoked() {
-    let args: Vec<String> = std::env::args().collect();
+    let args: Vec<_> = std::env::args_os().collect();
     if args.len() >= 4 && args[1] == "__sandbox-exec" && args[2] == "--" {
         if let Err(e) = install_seccomp_filter() {
             eprintln!("seccomp filter install failed: {e}");

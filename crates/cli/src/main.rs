@@ -23,9 +23,11 @@ use barry_protocol::{ApprovalChoice, ApprovalRequest, Event, RunSummary, StopRea
 /// Default endpoint until PLAN 6.8 (named model profiles) lands in M6.
 const DEFAULT_BASE_URL: &str = "http://localhost:11434/v1";
 
+mod auth;
 mod exit;
 mod render;
 mod repl;
+mod subscription;
 
 /// Read `BARRY_BASE_URL`, falling back to the local default.
 pub(crate) fn parse_base_url() -> Result<Url, String> {
@@ -90,6 +92,17 @@ struct Cli {
 
 #[derive(clap::Subcommand, Debug)]
 enum Commands {
+    /// Authenticate through the official Anthropic or Codex CLI (no model requests)
+    Auth {
+        #[command(subcommand)]
+        command: auth::Command,
+    },
+    /// Launch a native CLI using its own subscription and security controls
+    #[command(long_about = subscription::HELP)]
+    Subscription {
+        #[command(subcommand)]
+        command: subscription::Backend,
+    },
     /// Check the policy decision for a command
     Rules {
         #[command(subcommand)]
@@ -148,7 +161,64 @@ async fn main() -> ExitCode {
     // seccomp filter and run the requested command, never returning.
     run_helper_if_invoked();
 
-    // Load config first; on error, exit 2 with a clean message.
+    // A native CLI launch does not use Barry's configuration or agent.
+    let args: Vec<_> = std::env::args_os().collect();
+    let subscription_requested = args
+        .iter()
+        .skip(1)
+        .take_while(|arg| arg.as_os_str() != "--")
+        .any(|arg| arg == "subscription");
+    let cli = match Cli::try_parse_from(args) {
+        Ok(cli) => cli,
+        Err(err) => {
+            let code = err.exit_code();
+            let _ = err.print();
+            if err.use_stderr() && subscription_requested {
+                eprintln!(
+                    "Native CLI arguments go after --: barry subscription <codex|claude> -- [arguments]"
+                );
+            }
+            return ExitCode::from(code as u8);
+        }
+    };
+    if let Some(Commands::Subscription { command }) = &cli.command {
+        if cli.prompt.is_some()
+            || cli.json
+            || cli.model.is_some()
+            || cli.resume.is_some()
+            || cli.approval_file.is_some()
+            || cli.max_tokens.is_some()
+            || cli.max_cost_usd.is_some()
+            || cli.max_wall_secs.is_some()
+            || cli.max_bash_secs.is_some()
+        {
+            eprintln!(
+                "error: Barry run flags cannot be used with subscription; native CLI arguments go after --"
+            );
+            return ExitCode::from(exit::CONFIG);
+        }
+        return command.launch();
+    }
+
+    // Authentication is independent of Barry config, providers and agent runs.
+    if let Some(Commands::Auth { command }) = &cli.command {
+        if cli.prompt.is_some()
+            || cli.json
+            || cli.model.is_some()
+            || cli.resume.is_some()
+            || cli.approval_file.is_some()
+            || cli.max_tokens.is_some()
+            || cli.max_cost_usd.is_some()
+            || cli.max_wall_secs.is_some()
+            || cli.max_bash_secs.is_some()
+        {
+            eprintln!("error: Barry run flags cannot be used with auth");
+            return ExitCode::from(exit::CONFIG);
+        }
+        return ExitCode::from(command.run().await);
+    }
+
+    // Native Barry modes load config; on error, exit 2 with a clean message.
     let mut cfg = match Config::load() {
         Ok(Some(cfg)) => cfg,
         Ok(None) => Config::default(),
@@ -157,8 +227,6 @@ async fn main() -> ExitCode {
             return ExitCode::from(exit::CONFIG);
         }
     };
-
-    let cli = Cli::parse();
 
     // Flags override the `[budgets]` config section.
     let budgets = &mut cfg.budgets;
@@ -172,7 +240,7 @@ async fn main() -> ExitCode {
     }
 
     if let Some(command) = cli.command {
-        return run_command(command, &cfg);
+        return run_command(command, &cfg).await;
     }
 
     let Some(prompt) = cli.prompt else {
@@ -190,8 +258,11 @@ async fn main() -> ExitCode {
     .await
 }
 
-fn run_command(command: Commands, cfg: &Config) -> ExitCode {
+async fn run_command(command: Commands, cfg: &Config) -> ExitCode {
     match command {
+        // Routed before configuration loading in main.
+        Commands::Auth { command } => ExitCode::from(command.run().await),
+        Commands::Subscription { command } => command.launch(),
         Commands::Log { command } => match command {
             LogCommands::Verify { file } => match session::verify(&file) {
                 Ok(report) => match report.broken_at {

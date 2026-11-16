@@ -19,7 +19,7 @@ Windows is not supported in v1.
 
 ## Providers
 
-barry speaks OpenAI-compatible Chat Completions, so it works with OpenAI, vLLM, LM Studio, llama.cpp server, and Ollama (local). No Anthropic or Bedrock in v1. There is no MCP in v1.
+barry speaks OpenAI-compatible Chat Completions, so it works with OpenAI, vLLM, LM Studio, llama.cpp server, and Ollama (local). There is no direct Anthropic or Bedrock API adapter in v1. There is no MCP in v1. The native CLI launcher described below is separate from this provider interface.
 
 Point it at a server with `BARRY_BASE_URL` (default `http://localhost:11434/v1`).
 
@@ -31,9 +31,107 @@ cd barry
 cargo build --release
 ```
 
-The release binary is at `target/release/barry`. Copy it onto your `PATH`. The workspace pins a stable toolchain via `rust-toolchain.toml`.
+The release binary is at `target/release/barry`. Copy it onto your `PATH`, or use `./target/release/barry` in place of `barry` in the examples below. The workspace pins a stable toolchain via `rust-toolchain.toml`.
 
 ## Usage
+
+### Account sign-in
+
+Barry can run the official Codex and Anthropic Console sign-in flows and show their configured authentication state. These commands perform authentication only; they do not send chat prompts or generate model responses.
+
+For Codex, install the official [Codex CLI](https://developers.openai.com/codex/cli), then use:
+
+```bash
+barry auth login codex
+barry auth status codex
+barry auth logout codex
+```
+
+Codex uses its existing native credential store and respects `CODEX_HOME`. Its authentication is not managed through Anthropic profiles, so `--profile` is rejected for Codex. The child ignores `OPENAI_API_KEY` and `CODEX_ACCESS_TOKEN` so environment credentials do not shadow its stored login. To use Codex's device-code flow, run `barry auth login codex --no-browser`.
+
+For Anthropic Console, install the official `ant` CLI first:
+
+```bash
+brew install anthropics/tap/ant
+```
+
+Then sign in, inspect the profile, or sign out:
+
+```bash
+barry auth login anthropic
+barry auth status anthropic
+barry auth logout anthropic
+```
+
+Login opens the official Console OAuth flow, where you choose an organization and workspace. On a machine without a local browser, use `barry auth login anthropic --no-browser` and follow the printed instructions. Barry uses a dedicated `barry` profile by default. All three commands accept `--profile NAME` to select another native profile explicitly; logout affects only that selected profile. The official CLI handles callback validation, credential storage and logout; Barry does not read or print access tokens. Barry run flags cannot be combined with `auth` commands.
+
+If you already signed in using `ant auth login`, inspect its `default` profile without signing in again:
+
+```bash
+barry auth status anthropic --profile default
+```
+
+The same commands are available inside Barry's REPL:
+
+```text
+/auth login anthropic
+/auth status anthropic
+/auth logout anthropic
+/auth status anthropic --profile default
+/auth login codex
+/auth status codex
+/auth logout codex
+```
+
+The REPL remains open when authentication finishes or is cancelled with Ctrl-C. Standalone auth commands return to your shell.
+
+For Anthropic, `status` displays the official CLI's configured credential source and workspace; it is not a live token-health or model-access check. The auth child ignores `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_PROFILE` so those variables cannot shadow the selected OAuth profile. `ANTHROPIC_CONFIG_DIR` is still respected. This Console profile is separate from a Claude Code subscription login. Signing in does not enable an Anthropic model provider in Barry's agent loop or spend API credits. See Anthropic's [authentication documentation](https://platform.claude.com/docs/en/cli-sdks-libraries/cli/authentication).
+
+### Native subscription CLI launcher
+
+`barry subscription` launches an installed native CLI; it is **not a Barry Provider**. The selected CLI owns its agent loop, tools, sandbox and approvals, history and logs, and usage budgets. **Barry policy, sandbox, audit logging and run budgets do not apply to these sessions.** The security model and headless/REPL options elsewhere in this README describe Barry's own agent runs.
+
+Install Codex or Claude Code separately using their official [Codex installation instructions](https://developers.openai.com/codex/cli) or [Claude Code setup instructions](https://code.claude.com/docs/en/setup). The chosen executable (`codex` or `claude`) must be on `PATH`. Barry does not install a missing CLI or fall back to another provider.
+
+Sign in through the native CLI, choosing an eligible subscription account:
+
+```bash
+codex login
+# Or, for Claude Code:
+claude auth login
+```
+
+Existing native logins work unchanged. Eligible subscription use requires no API token; the native CLI determines the active authentication method and account eligibility. Barry does not copy, proxy or store credentials, and does not force subscription authentication if the CLI is configured to use an API key. See [Codex authentication](https://developers.openai.com/codex/auth) and [Claude Code authentication](https://code.claude.com/docs/en/authentication) for supported accounts and authentication configuration. Subscription usage limits still apply; this launcher does not make subscriptions compatible with Barry's API provider.
+
+Check the active login through the launcher:
+
+```bash
+barry subscription codex -- login status
+barry subscription claude -- auth status
+```
+
+With no native arguments, start an interactive session in the current working directory:
+
+```bash
+barry subscription codex
+barry subscription claude
+```
+
+Pass native arguments only after `--`. Barry directly replaces its process with the chosen executable, passes those arguments unchanged without a shell, and preserves the working directory and terminal streams. For a single prompt and exit, use the selected CLI's own syntax:
+
+```bash
+barry subscription codex -- exec "Explain this repository"
+barry subscription claude -- -p "Explain this repository"
+```
+
+Barry run flags cannot be combined with `subscription`: for example, `barry --max-tokens 1000 subscription codex` is rejected before launching anything. To select a native model or permission setting, pass the chosen CLI's flags after `--` and consult its help:
+
+```bash
+barry subscription codex -- --help
+barry subscription claude -- --help
+```
+
+Barry's default OpenAI-compatible endpoint workflow remains unchanged: set `BARRY_BASE_URL` and run `barry` or `barry -p "..."` to use Barry's own agent and security controls.
 
 ### Headless mode
 
@@ -129,6 +227,7 @@ Running `barry` with no `-p` starts a minimal line REPL in the current working d
 | `/compact` | Force context compaction (not implemented until M6) |
 | `/grants` | List path grants |
 | `/model <name>` | Switch model for the next request |
+| `/auth login\|status\|logout anthropic\|codex` | Manage account sign-in without sending a model request |
 
 ## Configuration
 
@@ -168,6 +267,8 @@ The model id comes from `--model` (default `local`) and the endpoint from `BARRY
 The rest of the config schema in PLAN 6.8 — `~/.config/barry/config.toml` as the default path, `default_model`/`max_turns`, model profiles, `fs.extra_writable`, `sandbox.env_passthrough`, user rules, and trusted project config — is not implemented yet.
 
 ## Security model
+
+This model applies to Barry agent runs; `barry subscription` sessions use the selected native CLI's controls instead.
 
 Two independent layers:
 
@@ -209,6 +310,8 @@ barry is under active development. Each milestone is a separate branch and PR wi
 
 Implemented so far:
 
+- `barry auth login|status|logout anthropic|codex` and `/auth` in the REPL — manage Anthropic Console and Codex authentication through the official CLIs
+- `barry subscription codex|claude -- [native args...]` — launches the installed native CLI with its own authentication and controls
 - `barry --version` — prints `barry <semver>` and exits 0
 - `barry rules check "<command>"` — prints the policy decision and the deciding rule id
 - `barry config show` — prints the effective config (path defaults, network, redaction, rules, hooks) and the file it came from
