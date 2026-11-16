@@ -54,17 +54,24 @@ NEW_VERSION="v${NEW_VERSION_NO_V}"
 
 echo "release: $CURRENT_VERSION -> $NEW_VERSION_NO_V ($BUMP)"
 
-# Bump every Cargo.toml that carries a version field.
-CHANGED=0
-while IFS= read -r -d '' f; do
-    sed -i "s/^version = .*/version = \"${NEW_VERSION_NO_V}\"/" "$f"
-    CHANGED=1
-done < <(grep -rlZ '^version = ' --include='Cargo.toml' . || true)
+# Bump the single source of truth: the [workspace.package] version in the root
+# manifest. Every workspace crate inherits it with `version.workspace = true`.
+#
+# Do not rewrite every other Cargo.toml: `fuzz/` and `vendor/tree-sitter-bash/`
+# carry versions of their own, and the vendored grammar's has to keep matching
+# the `[patch.crates-io]` pin. The 0.1.1 release bumped it to 0.1.1, which made
+# cargo drop the patch (warning: "patch ... was not used in the crate graph")
+# and silently reintroduce the parser crash it exists to fix.
+sed -i "/^\[workspace\.package\]/,/^\[/ s/^version = .*/version = \"${NEW_VERSION_NO_V}\"/" Cargo.toml
 
-if [ "$CHANGED" = "0" ]; then
-    echo "no-release: no Cargo.toml version fields to bump"
-    exit 0
+if ! grep -qx "version = \"${NEW_VERSION_NO_V}\"" Cargo.toml; then
+    echo "error: [workspace.package] version was not bumped in Cargo.toml" >&2
+    exit 1
 fi
+
+# Keep Cargo.lock in step with the manifests, so the tagged commit does not
+# carry a lock file that the next cargo invocation has to rewrite.
+cargo metadata --format-version 1 >/dev/null
 
 git add -A
 if ! git diff --cached --quiet; then

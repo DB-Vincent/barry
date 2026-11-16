@@ -1,6 +1,8 @@
 [package]
 name = "barry-fuzz"
-version = "0.1.1"
+# Its own version, unrelated to the released CLI: this crate is never
+# published, and the release script must leave it alone.
+version = "0.1.0"
 edition = "2021"
 publish = false
 
