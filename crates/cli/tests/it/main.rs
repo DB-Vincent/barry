@@ -15,6 +15,7 @@ mod bc_4_8_sandbox_cwd_writes_visible;
 mod bc_5_2_log_verify;
 mod bc_5_5_resume_cli;
 mod bc_approval_file;
+mod bc_auth;
 mod bc_budgets_cli;
 mod bc_exit_codes;
 mod bc_subscription;
