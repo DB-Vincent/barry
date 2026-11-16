@@ -283,4 +283,21 @@ mod tests {
             );
         }
     }
+
+    /// Regression test: `{` followed by a non-ASCII code point used to reach
+    /// `isdigit(lexer->lookahead)` in the grammar's external scanner. `isdigit`
+    /// is only defined for `unsigned char`, so the code point indexed glibc's
+    /// ctype table out of bounds and killed the process with SIGSEGV. With the
+    /// vendored grammar (see `vendor/tree-sitter-bash/PATCHES.md`) the input is
+    /// simply rejected. `U+10FFFF` is used because a large index is what makes
+    /// the out-of-bounds read land on an unmapped page.
+    #[test]
+    fn non_ascii_after_an_open_brace_is_complex() {
+        for command in ["{\u{10ffff}}", "{\u{e01e7}x", "{😀..😀}", "ls {😀}"] {
+            assert!(
+                matches!(analyse(command), Analysis::Complex(_)),
+                "{command:?} should be complex"
+            );
+        }
+    }
 }

@@ -1,0 +1,33 @@
+# Vendored copy of tree-sitter-bash 0.25.1 (MIT), trimmed to what the build
+# uses and patched as described in PATCHES.md.
+#
+# It is wired in through `[patch.crates-io]` in the workspace root so every
+# dependency, including barry-policy's pinned `tree-sitter-bash = "=0.25.1"`,
+# resolves to this copy. Remove the patch, this directory and the Cargo.lock
+# source change once a released grammar contains the fix.
+[package]
+name = "tree-sitter-bash"
+version = "0.25.1"
+edition = "2021"
+build = "bindings/rust/build.rs"
+description = "Bash grammar for tree-sitter (patched)"
+license = "MIT"
+repository = "https://github.com/tree-sitter/tree-sitter-bash"
+include = [
+    "LICENSE",
+    "bindings/rust/*",
+    "queries/*",
+    "src/*",
+]
+
+# Upstream also declares a `tree-sitter` dev-dependency for its own test; the
+# vendored copy has no tests, so it is left out.
+[lib]
+name = "tree_sitter_bash"
+path = "bindings/rust/lib.rs"
+
+[dependencies.tree-sitter-language]
+version = "0.1"
+
+[build-dependencies.cc]
+version = "1.1"
