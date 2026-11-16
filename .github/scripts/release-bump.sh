@@ -78,6 +78,11 @@ if ! git diff --cached --quiet; then
     git commit -m "chore(release): release $NEW_VERSION_NO_V"
     git tag "$NEW_VERSION"
     git push origin HEAD --tags
+    # Expose the tag so the workflow's build job knows a release was made.
+    # A GITHUB_TOKEN push does not trigger tag-triggered workflows.
+    if [ -n "${GITHUB_OUTPUT:-}" ]; then
+        echo "tag=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
+    fi
 else
     echo "no-release: version unchanged after bump"
 fi
