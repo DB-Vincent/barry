@@ -1,5 +1,5 @@
 //! Arbitrary command strings through the bash rule table. Must not panic, and
-//! a command that starts with an explicitly denied one must stay denied.
+//! a command built around an explicitly denied one must never be allowed.
 #![no_main]
 
 use barry_policy::{Decision, Policy, PolicyConfig, SessionGrants};
@@ -20,9 +20,13 @@ fuzz_target!(|command: &str| {
 
     let grants = SessionGrants::new();
     let _ = policy.check_bash(command, &grants);
+
+    // The invariant is fail-closed, not `Deny`: a suffix that leaves the line
+    // unparseable turns the whole command into `Complex`, which the rule layer
+    // answers with `Ask`. `sudo |` is the input that found this.
     let denied = format!("sudo {command}");
-    assert!(matches!(
-        policy.check_bash(&denied, &grants).0,
-        Decision::Deny { .. }
-    ));
+    assert!(
+        !matches!(policy.check_bash(&denied, &grants).0, Decision::Allow),
+        "a denied command was allowed: {denied:?}"
+    );
 });

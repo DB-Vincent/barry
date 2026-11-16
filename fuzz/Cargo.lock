@@ -48,7 +48,7 @@ dependencies = [
 
 [[package]]
 name = "barry-fuzz"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "barry-llm",
  "barry-policy",
@@ -58,7 +58,7 @@ dependencies = [
 
 [[package]]
 name = "barry-llm"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "barry-protocol",
  "futures",
@@ -74,7 +74,7 @@ dependencies = [
 
 [[package]]
 name = "barry-policy"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "barry-protocol",
  "thiserror",
@@ -84,7 +84,7 @@ dependencies = [
 
 [[package]]
 name = "barry-protocol"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",

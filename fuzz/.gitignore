@@ -1,4 +1,5 @@
-target
-corpus
-artifacts
-coverage
+# Added by cargo-fuzz in a fresh project: the corpus and the crashing inputs it
+# writes are working state, not sources.
+/target
+/corpus
+/artifacts
