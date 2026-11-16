@@ -19,7 +19,7 @@ Windows is not supported in v1.
 
 ## Providers
 
-barry speaks OpenAI-compatible Chat Completions, so it works with OpenAI, vLLM, LM Studio, llama.cpp server, and Ollama (local). No Anthropic or Bedrock in v1. There is no MCP in v1.
+barry speaks OpenAI-compatible Chat Completions, so it works with OpenAI, vLLM, LM Studio, llama.cpp server, and Ollama (local). There is no direct Anthropic or Bedrock API adapter in v1. There is no MCP in v1. The native CLI launcher described below is separate from this provider interface.
 
 Point it at a server with `BARRY_BASE_URL` (default `http://localhost:11434/v1`).
 
@@ -31,9 +31,55 @@ cd barry
 cargo build --release
 ```
 
-The release binary is at `target/release/barry`. Copy it onto your `PATH`. The workspace pins a stable toolchain via `rust-toolchain.toml`.
+The release binary is at `target/release/barry`. Copy it onto your `PATH`, or use `./target/release/barry` in place of `barry` in the examples below. The workspace pins a stable toolchain via `rust-toolchain.toml`.
 
 ## Usage
+
+### Native subscription CLI launcher
+
+`barry subscription` launches an installed native CLI; it is **not a Barry Provider**. The selected CLI owns its agent loop, tools, sandbox and approvals, history and logs, and usage budgets. **Barry policy, sandbox, audit logging and run budgets do not apply to these sessions.** The security model and headless/REPL options elsewhere in this README describe Barry's own agent runs.
+
+Install Codex or Claude Code separately using their official [Codex installation instructions](https://developers.openai.com/codex/cli) or [Claude Code setup instructions](https://code.claude.com/docs/en/setup). The chosen executable (`codex` or `claude`) must be on `PATH`. Barry does not install a missing CLI or fall back to another provider.
+
+Sign in through the native CLI, choosing an eligible subscription account:
+
+```bash
+codex login
+# Or, for Claude Code:
+claude auth login
+```
+
+Existing native logins work unchanged. Eligible subscription use requires no API token; the native CLI determines the active authentication method and account eligibility. Barry does not copy, proxy or store credentials, and does not force subscription authentication if the CLI is configured to use an API key. See [Codex authentication](https://developers.openai.com/codex/auth) and [Claude Code authentication](https://code.claude.com/docs/en/authentication) for supported accounts and authentication configuration. Subscription usage limits still apply; this launcher does not make subscriptions compatible with Barry's API provider.
+
+Check the active login through the launcher:
+
+```bash
+barry subscription codex -- login status
+barry subscription claude -- auth status
+```
+
+With no native arguments, start an interactive session in the current working directory:
+
+```bash
+barry subscription codex
+barry subscription claude
+```
+
+Pass native arguments only after `--`. Barry directly replaces its process with the chosen executable, passes those arguments unchanged without a shell, and preserves the working directory and terminal streams. For a single prompt and exit, use the selected CLI's own syntax:
+
+```bash
+barry subscription codex -- exec "Explain this repository"
+barry subscription claude -- -p "Explain this repository"
+```
+
+Barry run flags cannot be combined with `subscription`: for example, `barry --max-tokens 1000 subscription codex` is rejected before launching anything. To select a native model or permission setting, pass the chosen CLI's flags after `--` and consult its help:
+
+```bash
+barry subscription codex -- --help
+barry subscription claude -- --help
+```
+
+Barry's default OpenAI-compatible endpoint workflow remains unchanged: set `BARRY_BASE_URL` and run `barry` or `barry -p "..."` to use Barry's own agent and security controls.
 
 ### Headless mode
 
@@ -169,6 +215,8 @@ The rest of the config schema in PLAN 6.8 — `~/.config/barry/config.toml` as t
 
 ## Security model
 
+This model applies to Barry agent runs; `barry subscription` sessions use the selected native CLI's controls instead.
+
 Two independent layers:
 
 1. **Policy layer** — path checks for reads and writes, plus a bash rule table. Default deny rules cover `sudo`, `rm -rf /`, `curl ... | sh`, `git push --force`, etc. Default allow rules cover `ls`, `cargo test`, `git status`, etc.
@@ -209,6 +257,7 @@ barry is under active development. Each milestone is a separate branch and PR wi
 
 Implemented so far:
 
+- `barry subscription codex|claude -- [native args...]` — launches the installed native CLI with its own authentication and controls
 - `barry --version` — prints `barry <semver>` and exits 0
 - `barry rules check "<command>"` — prints the policy decision and the deciding rule id
 - `barry config show` — prints the effective config (path defaults, network, redaction, rules, hooks) and the file it came from

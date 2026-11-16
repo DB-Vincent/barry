@@ -17,3 +17,4 @@ mod bc_5_5_resume_cli;
 mod bc_approval_file;
 mod bc_budgets_cli;
 mod bc_exit_codes;
+mod bc_subscription;
