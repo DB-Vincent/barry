@@ -7,7 +7,7 @@
 # source change once a released grammar contains the fix.
 [package]
 name = "tree-sitter-bash"
-version = "0.25.1"
+version = "0.1.1"
 edition = "2021"
 build = "bindings/rust/build.rs"
 description = "Bash grammar for tree-sitter (patched)"
@@ -27,7 +27,7 @@ name = "tree_sitter_bash"
 path = "bindings/rust/lib.rs"
 
 [dependencies.tree-sitter-language]
-version = "0.1"
+version = "0.1.1"
 
 [build-dependencies.cc]
-version = "1.1"
+version = "0.1.1"
