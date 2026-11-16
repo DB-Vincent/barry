@@ -24,10 +24,6 @@ jobs:
         uses: dtolnay/rust-toolchain@6a52aad76a94a5fbc50d567bb5be24419801c1fb # nightly
         with:
           toolchain: nightly
-          # cargo-fuzz builds for the target of the cargo-fuzz binary it ships,
-          # and the prebuilt one installed here is a musl build, so the
-          # sanitizer build needs that target's std.
-          targets: x86_64-unknown-linux-musl
 
       - name: Install cargo-fuzz
         uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
@@ -38,8 +34,15 @@ jobs:
       # rustup prefers that file over the default toolchain, so nightly has to
       # be named here: without `+nightly` cargo-fuzz builds with the stable
       # compiler, which rejects `-Zsanitizer` and fails before any fuzzing.
+      #
+      # --target names the host triple because cargo-fuzz otherwise builds for
+      # the triple of the cargo-fuzz binary it ships, and the prebuilt one is
+      # musl. ASan refuses a statically linked libc ("sanitizer is incompatible
+      # with statically linked libc"), and musl is static here.
       - name: Fuzz ${{ matrix.target }} for 60 seconds
-        run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=60
+        run: >
+          cargo +nightly fuzz run --target x86_64-unknown-linux-gnu
+          ${{ matrix.target }} -- -max_total_time=60
 
       - name: Upload crashing inputs
         if: failure()
