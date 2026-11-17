@@ -123,7 +123,7 @@ dependencies = [
 
 [[package]]
 name = "barry"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "assert_cmd",
  "barry-core",
@@ -145,7 +145,7 @@ dependencies = [
 
 [[package]]
 name = "barry-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "barry-llm",
  "barry-policy",
@@ -170,7 +170,7 @@ dependencies = [
 
 [[package]]
 name = "barry-llm"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "barry-protocol",
  "barry-testkit",
@@ -188,7 +188,7 @@ dependencies = [
 
 [[package]]
 name = "barry-policy"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "barry-protocol",
  "barry-testkit",
@@ -201,7 +201,7 @@ dependencies = [
 
 [[package]]
 name = "barry-protocol"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -209,7 +209,7 @@ dependencies = [
 
 [[package]]
 name = "barry-sandbox"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "libc",
  "seccompiler",
@@ -219,7 +219,7 @@ dependencies = [
 
 [[package]]
 name = "barry-testkit"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "assert_cmd",
  "barry-core",
