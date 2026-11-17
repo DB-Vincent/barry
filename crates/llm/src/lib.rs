@@ -32,6 +32,9 @@ pub enum LlmEvent {
 pub enum LlmError {
     #[error("auth error for provider {provider}")]
     Auth { provider: String },
+    /// No usable Anthropic credentials. Never carries token or CLI output.
+    #[error("could not obtain Anthropic credentials; run `/auth login anthropic`")]
+    Credentials,
     /// The HTTP request could not be built or sent.
     #[error("transport error: {0}")]
     Http(#[from] reqwest::Error),
@@ -69,6 +72,12 @@ pub struct Compat {
     pub supports_stream_usage: bool,
 }
 
+pub mod anthropic;
+#[cfg(test)]
+mod anthropic_tests;
+pub mod codex;
+#[cfg(test)]
+mod codex_tests;
 pub mod openai;
 mod retry;
 mod sse;
@@ -80,4 +89,6 @@ pub mod fuzzing;
 #[cfg(test)]
 mod prop_tests;
 
+pub use anthropic::{AnthropicProvider, TokenSource};
+pub use codex::CodexProvider;
 pub use openai::OpenAiProvider;

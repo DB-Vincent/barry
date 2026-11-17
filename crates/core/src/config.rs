@@ -91,6 +91,7 @@ pub fn default_read_deny() -> Vec<String> {
         "~/.ssh",
         "~/.aws",
         "~/.config/gcloud",
+        "~/.config/anthropic",
         "~/.kube",
         "~/.docker",
         "~/.gnupg",

@@ -16,10 +16,9 @@ use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
 use tokio::io::{AsyncBufReadExt, BufReader, Stdin};
 use tokio_util::sync::CancellationToken;
-use url::Url;
 
 use crate::render::Thinking;
-use crate::{build_provider, parse_base_url};
+use crate::{ProviderConfig, build_provider, parse_provider_config};
 
 /// Answers approvals from the terminal, or from the piped stdin used by
 /// acceptance tests (PLAN 6.9: "answers are read from the same input stream").
@@ -160,7 +159,7 @@ pub(crate) async fn run(
     // The audit log records the model actually used, including --model.
     cfg.default_model = model.clone();
 
-    let base_url = match parse_base_url() {
+    let mut provider_config = match parse_provider_config() {
         Ok(url) => url,
         Err(err) => {
             eprintln!("{err}");
@@ -188,7 +187,7 @@ pub(crate) async fn run(
 
     let input = Arc::new(tokio::sync::Mutex::new(BufReader::new(tokio::io::stdin())));
     let approver = Arc::new(ReplApprover::new(input.clone()));
-    let provider = build_provider(model.clone(), &base_url);
+    let provider = build_provider(model.clone(), &provider_config);
 
     let mut agent = match resume {
         Some(spec) => {
@@ -281,7 +280,7 @@ pub(crate) async fn run(
         }
 
         if let Some(command) = input.strip_prefix('/') {
-            if !handle_command(command, &mut model, &mut agent, &base_url).await {
+            if !handle_command(command, &mut model, &mut agent, &mut provider_config).await {
                 break;
             }
             continue;
@@ -336,7 +335,7 @@ async fn handle_command(
     command: &str,
     model: &mut String,
     agent: &mut Agent,
-    base_url: &Url,
+    provider_config: &mut ProviderConfig,
 ) -> bool {
     if command == "auth" || command.starts_with("auth ") {
         match crate::auth::Command::parse_repl(command.strip_prefix("auth").unwrap_or_default()) {
@@ -344,6 +343,18 @@ async fn handle_command(
                 let code = command.run().await;
                 if code != 0 {
                     eprintln!("authentication command exited with status {code}");
+                } else if let Some(profile) = command.anthropic_login_profile() {
+                    // Signing in selects the provider that was just signed in to.
+                    provider_config.use_anthropic(Some(profile));
+                    agent.set_provider(build_provider(model.clone(), provider_config));
+                    println!("provider: anthropic (model: {model})");
+                } else if command.is_codex_login() {
+                    provider_config.use_codex();
+                    *model = barry_llm::codex::DEFAULT_MODEL.to_string();
+                    agent.set_provider(build_provider(model.clone(), provider_config));
+                    println!(
+                        "provider: codex; Codex runs its own tools, Barry's sandbox and policy do not apply to its turns"
+                    );
                 }
             }
             None => println!("{}", crate::auth::REPL_USAGE),
@@ -371,14 +382,36 @@ async fn handle_command(
             }
         }
         "model" => println!("usage: /model <name>"),
+        "provider" => println!("provider: {}", provider_config.name()),
         _ => {
-            if let Some(name) = command.strip_prefix("model ") {
+            if let Some(name) = command.strip_prefix("provider ") {
+                match name.trim() {
+                    "anthropic" => provider_config.use_anthropic(None),
+                    "openai" => provider_config.use_openai(),
+                    "codex" => {
+                        provider_config.use_codex();
+                        *model = barry_llm::codex::DEFAULT_MODEL.to_string();
+                        println!(
+                            "note: Codex runs its own tools; Barry's sandbox and policy do not apply to its turns"
+                        );
+                    }
+                    _ => {
+                        println!("usage: /provider [openai|anthropic|codex]");
+                        return true;
+                    }
+                }
+                agent.set_provider(build_provider(model.clone(), provider_config));
+                println!(
+                    "provider: {} (model: {model}); use /model to change the model",
+                    provider_config.name()
+                );
+            } else if let Some(name) = command.strip_prefix("model ") {
                 let name = name.trim();
                 if name.is_empty() {
                     println!("usage: /model <name>");
                 } else {
                     *model = name.to_string();
-                    agent.set_provider(build_provider(name.to_string(), base_url));
+                    agent.set_provider(build_provider(name.to_string(), provider_config));
                     println!("model: {name}");
                 }
             } else {

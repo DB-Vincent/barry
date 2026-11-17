@@ -13,6 +13,9 @@ tool calls.
 - The user's machine outside the project: arbitrary writes, process execution,
   network access.
 - The conversation itself: secrets accidentally streamed to the provider.
+- The Anthropic OAuth access token and its credential file
+  (`~/.config/anthropic/credentials/<profile>.json`), when the Anthropic
+  provider is used.
 
 ## Attacker
 
@@ -76,3 +79,23 @@ These are known and deliberate; mitigations exist but are not complete.
   future macOS release. The Linux `bwrap` path has no such dependency.
 - **Hooks run outside the sandbox.** A hook the user installs is trusted code
   with the user's environment minus secret variables.
+- **The Anthropic provider holds a bearer token in Barry's memory.** Barry runs
+  `ant auth print-credentials --access-token` for every request and keeps the
+  token only for that request. It is not exported to the environment, so
+  sandboxed commands and hooks cannot inherit it, and it never appears in logs
+  or errors (the `sk-` redaction pattern covers it as a backstop). `ant` runs
+  outside the sandbox as the user. The credential file lives under
+  `~/.config/anthropic`, which is read-denied by default; setting
+  `fs.read_deny = []` or replacing the list without that entry exposes it to
+  the model. The model does not reach the token through Barry, but an
+  unsandboxed hook or a user-approved command can read it. Requests spend the
+  organization's API credits.
+- **The Codex provider hands a turn to another agent.** `/provider codex` runs
+  `codex exec --sandbox read-only` with the conversation as the prompt. Codex
+  applies its own sandbox and approvals; Barry's policy, sandbox and audit log
+  do not see its tool calls, and the audit log records only the prompt and the
+  final answer. Barry removes `OPENAI_API_KEY` and `CODEX_ACCESS_TOKEN` from
+  the child's environment and never reads Codex's credential store. Codex
+  keeps session files under `~/.codex`.
+- **`OPENAI_API_KEY` is read from the environment** and sent only over https or
+  to a loopback server. A key in a repository `.env` is not read.

@@ -74,6 +74,21 @@ impl Command {
             .map(|parsed| parsed.command)
     }
 
+    /// The Anthropic profile this command signs in to, if it is an Anthropic login.
+    pub(crate) fn anthropic_login_profile(&self) -> Option<String> {
+        match self {
+            Self::Login(login) if matches!(login.provider, Provider::Anthropic) => {
+                Some(login.profile.name.clone().unwrap_or_else(|| "barry".into()))
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether this command signs in to Codex.
+    pub(crate) fn is_codex_login(&self) -> bool {
+        matches!(self, Self::Login(login) if matches!(login.provider, Provider::Codex))
+    }
+
     pub(crate) async fn run(&self) -> u8 {
         let (action, no_browser, provider, profile) = match self {
             Self::Login(login) => (
