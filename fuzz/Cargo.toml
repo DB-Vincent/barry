@@ -45,3 +45,10 @@ path = "fuzz_targets/check_bash.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "anthropic_stream"
+path = "fuzz_targets/anthropic_stream.rs"
+test = false
+doc = false
+bench = false

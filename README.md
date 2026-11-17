@@ -19,9 +19,20 @@ Windows is not supported in v1.
 
 ## Providers
 
-barry speaks OpenAI-compatible Chat Completions, so it works with OpenAI, vLLM, LM Studio, llama.cpp server, and Ollama (local). There is no direct Anthropic or Bedrock API adapter in v1. There is no MCP in v1. The native CLI launcher described below is separate from this provider interface.
+barry speaks OpenAI-compatible Chat Completions, so it works with OpenAI, vLLM, LM Studio, llama.cpp server, and Ollama (local). It also has an Anthropic Messages API provider (see below). There is no Bedrock adapter and no MCP in v1. The native CLI launcher described below is separate from this provider interface.
 
 Point it at a server with `BARRY_BASE_URL` (default `http://localhost:11434/v1`).
+
+### Anthropic (Claude) provider
+
+Sign in once, then select the provider:
+
+```bash
+barry auth login anthropic
+BARRY_PROVIDER=anthropic barry --model claude-sonnet-5-5
+```
+
+Barry asks the official `ant` CLI for the profile's access token on every request (`ant auth print-credentials --access-token`), so it never stores or refreshes credentials. `BARRY_ANTHROPIC_PROFILE` selects the profile (default `barry`). `BARRY_BASE_URL` overrides `https://api.anthropic.com`. Inside the REPL, a successful `/auth login anthropic` switches to this provider, and `/provider [openai|anthropic]` switches either way (the model name is kept; use `/model` to change it). `/provider codex` selects the Codex provider (below). Requests spend the signed-in Console organization's API credits, not a Claude subscription. Barry's sandbox, policy and audit log apply as with any provider.
 
 ## Installation
 
@@ -34,6 +45,25 @@ cargo build --release
 The release binary is at `target/release/barry`. Copy it onto your `PATH`, or use `./target/release/barry` in place of `barry` in the examples below. The workspace pins a stable toolchain via `rust-toolchain.toml`.
 
 ## Usage
+
+### OpenAI API key
+
+Set `OPENAI_API_KEY` and point Barry at OpenAI:
+
+```bash
+OPENAI_API_KEY=... BARRY_BASE_URL=https://api.openai.com/v1 barry --model <model>
+```
+
+The key is sent as a bearer token only over https or to a loopback server, never over plain http to another host. It bills API credits, not a ChatGPT subscription.
+
+### Codex provider (ChatGPT subscription)
+
+```bash
+barry auth login codex
+BARRY_PROVIDER=codex barry
+```
+
+Each turn runs `codex exec --json --sandbox read-only` with the conversation on stdin and uses Codex's own stored login (`OPENAI_API_KEY` and `CODEX_ACCESS_TOKEN` are removed from the child's environment). **Codex runs its own agent loop and tools. Barry's policy, sandbox and audit log do not govern what Codex does inside a turn, and Barry's tools are not offered to it.** Use `/model <name>` to pass a model to Codex; the default `default` lets Codex choose. In the REPL, a successful `/auth login codex` selects this provider, and `/provider codex` switches to it.
 
 ### Account sign-in
 
@@ -85,7 +115,7 @@ The same commands are available inside Barry's REPL:
 
 The REPL remains open when authentication finishes or is cancelled with Ctrl-C. Standalone auth commands return to your shell.
 
-For Anthropic, `status` displays the official CLI's configured credential source and workspace; it is not a live token-health or model-access check. The auth child ignores `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_PROFILE` so those variables cannot shadow the selected OAuth profile. `ANTHROPIC_CONFIG_DIR` is still respected. This Console profile is separate from a Claude Code subscription login. Signing in does not enable an Anthropic model provider in Barry's agent loop or spend API credits. See Anthropic's [authentication documentation](https://platform.claude.com/docs/en/cli-sdks-libraries/cli/authentication).
+For Anthropic, `status` displays the official CLI's configured credential source and workspace; it is not a live token-health or model-access check. The auth child ignores `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_PROFILE` so those variables cannot shadow the selected OAuth profile. `ANTHROPIC_CONFIG_DIR` is still respected. This Console profile is separate from a Claude Code subscription login. Signing in alone spends no credits; select the Anthropic provider (above) to send prompts. See Anthropic's [authentication documentation](https://platform.claude.com/docs/en/cli-sdks-libraries/cli/authentication).
 
 ### Native subscription CLI launcher
 

@@ -16,7 +16,7 @@ use barry_core::approval_file::PolicyFileApprover;
 use barry_core::config::Config;
 use barry_core::session::{self, SessionLog};
 use barry_core::{Agent, Approver, BoxFuture, RunStats};
-use barry_llm::{Compat, OpenAiProvider, Provider};
+use barry_llm::{AnthropicProvider, CodexProvider, Compat, OpenAiProvider, Provider, TokenSource};
 use barry_policy::Policy;
 use barry_protocol::{ApprovalChoice, ApprovalRequest, Event, RunSummary, StopReason};
 
@@ -29,26 +29,130 @@ mod render;
 mod repl;
 mod subscription;
 
-/// Read `BARRY_BASE_URL`, falling back to the local default.
-pub(crate) fn parse_base_url() -> Result<Url, String> {
-    let raw_base_url =
-        std::env::var("BARRY_BASE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.to_string());
-    Url::parse(&raw_base_url)
-        .map_err(|err| format!("config error: invalid BARRY_BASE_URL {raw_base_url:?}: {err}"))
+/// Default endpoint for the Anthropic provider.
+const DEFAULT_ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Backend {
+    OpenAi,
+    Anthropic {
+        profile: String,
+    },
+    /// Delegates each turn to the official `codex exec` CLI.
+    Codex,
+}
+
+/// Provider selection read from the environment.
+#[derive(Clone, Debug)]
+pub(crate) struct ProviderConfig {
+    backend: Backend,
+    base_url: Url,
+}
+
+impl ProviderConfig {
+    /// Switch to the Anthropic provider, using `profile` for credentials.
+    /// A custom `BARRY_BASE_URL` belongs to the startup provider, so the
+    /// default endpoint is used unless that was already Anthropic.
+    pub(crate) fn use_anthropic(&mut self, profile: Option<String>) {
+        let profile = profile.unwrap_or_else(|| match &self.backend {
+            Backend::Anthropic { profile } => profile.clone(),
+            Backend::OpenAi | Backend::Codex => "barry".to_string(),
+        });
+        if !matches!(self.backend, Backend::Anthropic { .. }) {
+            self.base_url = default_url(DEFAULT_ANTHROPIC_BASE_URL);
+        }
+        self.backend = Backend::Anthropic { profile };
+    }
+
+    /// Switch to the Codex CLI provider.
+    pub(crate) fn use_codex(&mut self) {
+        self.backend = Backend::Codex;
+    }
+
+    /// Switch to the OpenAI-compatible provider.
+    pub(crate) fn use_openai(&mut self) {
+        if !matches!(self.backend, Backend::OpenAi) {
+            self.base_url = default_url(DEFAULT_BASE_URL);
+        }
+        self.backend = Backend::OpenAi;
+    }
+
+    /// Short name for display.
+    pub(crate) fn name(&self) -> &'static str {
+        match self.backend {
+            Backend::OpenAi => "openai",
+            Backend::Anthropic { .. } => "anthropic",
+            Backend::Codex => "codex",
+        }
+    }
+}
+
+#[allow(clippy::expect_used, reason = "constant URL literals")]
+fn default_url(raw: &str) -> Url {
+    Url::parse(raw).expect("valid default URL")
+}
+
+/// Read `BARRY_PROVIDER` (`openai`, the default, or `anthropic`),
+/// `BARRY_BASE_URL` and `BARRY_ANTHROPIC_PROFILE` (default `barry`).
+pub(crate) fn parse_provider_config() -> Result<ProviderConfig, String> {
+    let backend = match std::env::var("BARRY_PROVIDER").ok().as_deref() {
+        None | Some("" | "openai") => Backend::OpenAi,
+        Some("anthropic") => Backend::Anthropic {
+            profile: std::env::var("BARRY_ANTHROPIC_PROFILE")
+                .ok()
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| "barry".to_string()),
+        },
+        Some("codex") => Backend::Codex,
+        Some(other) => {
+            return Err(format!(
+                "config error: invalid BARRY_PROVIDER {other:?}: expected \"openai\", \"anthropic\" or \"codex\""
+            ));
+        }
+    };
+    let default_url = match backend {
+        Backend::OpenAi | Backend::Codex => DEFAULT_BASE_URL,
+        Backend::Anthropic { .. } => DEFAULT_ANTHROPIC_BASE_URL,
+    };
+    let raw_base_url = std::env::var("BARRY_BASE_URL").unwrap_or_else(|_| default_url.to_string());
+    let base_url = Url::parse(&raw_base_url)
+        .map_err(|err| format!("config error: invalid BARRY_BASE_URL {raw_base_url:?}: {err}"))?;
+    Ok(ProviderConfig { backend, base_url })
+}
+
+/// `OPENAI_API_KEY` is sent only over https or to a loopback server, so a
+/// plain-http `BARRY_BASE_URL` can never receive it in the clear.
+fn openai_key_env(base_url: &Url) -> Option<String> {
+    let loopback = matches!(
+        base_url.host_str(),
+        Some("localhost" | "127.0.0.1" | "[::1]")
+    );
+    (base_url.scheme() == "https" || loopback).then(|| "OPENAI_API_KEY".to_string())
 }
 
 /// Build the provider used by both headless mode and the REPL.
-pub(crate) fn build_provider(model: String, base_url: &Url) -> Arc<dyn Provider> {
-    Arc::new(OpenAiProvider::new(
-        model,
-        base_url.clone(),
-        None,
-        8192,
-        Compat {
-            reasoning_field: Some("reasoning_content".into()),
-            ..Compat::default()
-        },
-    ))
+pub(crate) fn build_provider(model: String, config: &ProviderConfig) -> Arc<dyn Provider> {
+    match &config.backend {
+        Backend::OpenAi => Arc::new(OpenAiProvider::new(
+            model,
+            config.base_url.clone(),
+            openai_key_env(&config.base_url),
+            8192,
+            Compat {
+                reasoning_field: Some("reasoning_content".into()),
+                ..Compat::default()
+            },
+        )),
+        Backend::Codex => Arc::new(CodexProvider::new(model)),
+        Backend::Anthropic { profile } => Arc::new(AnthropicProvider::new(
+            model,
+            config.base_url.clone(),
+            8192,
+            TokenSource::AntCli {
+                profile: profile.clone(),
+            },
+        )),
+    }
 }
 
 #[derive(Parser, Debug)]
@@ -450,15 +554,15 @@ async fn run_headless(
 
     // Temporary provider wiring until PLAN 6.8 model profiles (M6): the base
     // URL comes from the environment, with a local-server default.
-    let base_url = match parse_base_url() {
-        Ok(url) => url,
+    let provider_config = match parse_provider_config() {
+        Ok(config) => config,
         Err(err) => {
             eprintln!("{err}");
             return ExitCode::from(exit::CONFIG);
         }
     };
 
-    let provider = build_provider(model, &base_url);
+    let provider = build_provider(model, &provider_config);
 
     // Build the sandbox policy from config. Headless mode never trusts
     // project config, so only defaults + config file values apply.
